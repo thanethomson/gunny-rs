@@ -1,13 +1,12 @@
 //! Gunny view-related functionality.
 
-use boa::JsValue;
+use boa::{builtins::function::NativeFunction, JsValue};
 use eyre::Result;
-use serde::Serialize;
-use serde_json::Value as JsonValue;
+use log::{debug, trace};
 
 use crate::{
     js::{execute_fn_with_var, register_json_var},
-    Config, Error,
+    Error, Value,
 };
 
 /// A partial view is one whose script has been loaded and evaluated, but its
@@ -44,7 +43,7 @@ impl PartialView {
 
     /// Sets the global `config` property in the view script context so that
     /// it's accessible from the script.
-    pub fn configure(&mut self, config: &Config) -> Result<()> {
+    pub fn configure(&mut self, config: &Value) -> Result<()> {
         register_json_var(&mut self.script_ctx, "config", config)
     }
 
@@ -172,17 +171,30 @@ impl View {
 
     /// Register a globally accessible property within the scripting context for
     /// this view under the given name.
-    pub fn register_global_property<V: Serialize>(&mut self, name: &str, item: &V) -> Result<()> {
-        register_json_var(&mut self.script_ctx, name, item)
+    pub fn register_global_property(&mut self, name: &str, item: &Value) -> Result<()> {
+        register_json_var(&mut self.script_ctx, name, item)?;
+        debug!(
+            "Registered global property \"{}\" in view \"{}\"",
+            name, self.name
+        );
+        Ok(())
+    }
+
+    pub fn register_global_function(&mut self, name: &str, func: NativeFunction) -> Result<()> {
+        self.script_ctx
+            .register_global_function(name, 1, func)
+            .map_err(|e| Error::JavaScript("global".to_string(), format!("{:?}", e)))?;
+        Ok(())
     }
 
     /// Calls the `process` method on the given data item. If the method returns
     /// `null` or `undefined`, then this method returns `Ok(None)`.
-    pub fn process<V: Serialize>(&mut self, item: &V) -> Result<Option<JsonValue>> {
+    pub fn process(&mut self, item: &Value) -> Result<Option<Value>> {
         let result = execute_fn_with_var(&mut self.script_ctx, "item", item, "process")?;
+        trace!("View {} processed result:\n{:#?}", self.name, result);
         match result {
-            JsonValue::Null => Ok(None),
-            JsonValue::Object(_) => Ok(Some(result)),
+            Value::Null => Ok(None),
+            Value::Object(_) => Ok(Some(result)),
             _ => Err(Error::UnexpectedJavaScriptReturnValue(
                 "process".to_string(),
                 format!("{:?}", result),

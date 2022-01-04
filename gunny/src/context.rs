@@ -2,33 +2,72 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use eyre::Result;
+use eyre::{Result, WrapErr};
 use handlebars::Handlebars;
 use log::{debug, warn};
+use serde_json::Value as JsonValue;
 
-use crate::data::load_data;
+use crate::fs::maybe_canonicalize;
 use crate::hash::sha256;
-use crate::{Error, PartialView, View};
+use crate::js::markdown_to_html;
+use crate::template::{format_date, format_date_time, pad};
+use crate::{Error, PartialView, Value, View};
 
 /// Execution context for a Gunny rendering operation.
 pub struct Context<'a> {
+    config: Value,
+    output_base_path: PathBuf,
     hb: Handlebars<'a>,
     // Maps template content hashes -> names.
     template_hashes: HashMap<String, String>,
     views: HashMap<String, View>,
 }
 
-impl<'a> Default for Context<'a> {
-    fn default() -> Self {
-        Self {
+impl<'a> Context<'a> {
+    /// Constructor.
+    pub fn new<P1, P2>(maybe_config_file: P1, output_base_path: P2) -> Result<Self>
+    where
+        P1: AsRef<Path>,
+        P2: AsRef<Path>,
+    {
+        debug!(
+            "Attempting to load config file: {}",
+            maybe_config_file.as_ref().display()
+        );
+        let maybe_config_file = maybe_config_file.as_ref();
+        let output_base_path = output_base_path.as_ref();
+        ensure_path_exists(output_base_path)?;
+
+        let config = match maybe_canonicalize(&maybe_config_file)? {
+            Some(config_path) => {
+                let config_path = config_path.canonicalize()?;
+                let v = Value::load_from_file(&config_path)
+                    .wrap_err_with(|| Error::FailedToLoadConfig(config_path.clone()))?;
+                debug!("Loaded configuration from {}", config_path.display());
+                v
+            }
+            None => {
+                debug!(
+                    "No such configuration file, skipping configuration file loading: {}",
+                    maybe_config_file.display()
+                );
+                Value::empty_object()
+            }
+        };
+
+        let mut hb = Handlebars::new();
+        hb.register_helper("format_date", Box::new(format_date));
+        hb.register_helper("format_date_time", Box::new(format_date_time));
+        hb.register_helper("pad", Box::new(pad));
+        Ok(Self {
+            config,
+            output_base_path: output_base_path.to_path_buf(),
             hb: Handlebars::new(),
             template_hashes: HashMap::new(),
             views: HashMap::new(),
-        }
+        })
     }
-}
 
-impl<'a> Context<'a> {
     /// Compiles the given template and adds it to the context, returning an
     /// error if a template with the same name already exists or if there was a
     /// problem parsing the template.
@@ -82,7 +121,10 @@ impl<'a> Context<'a> {
     ///
     /// Returns the name of the view on success.
     pub fn load_view_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<Option<String>> {
-        let path = path.as_ref().canonicalize()?;
+        let path = path.as_ref();
+        let path = path
+            .canonicalize()
+            .wrap_err_with(|| Error::FailedToLoadView(path.to_path_buf()))?;
         let name = path.file_name().unwrap().to_str().unwrap().to_string();
         if self.views.contains_key(&name) {
             warn!(
@@ -93,20 +135,25 @@ impl<'a> Context<'a> {
             return Ok(None);
         }
         debug!("Attempting to load view {} from: {}", name, path.display());
-        let content = fs::read_to_string(path)?;
+        let content =
+            fs::read_to_string(&path).wrap_err_with(|| Error::FailedToLoadView(path.clone()))?;
         let mut partial_view = PartialView::new(name.clone(), content)?;
 
         let select = partial_view.select()?;
         debug!("View {} select = {}", name, select);
         let template = partial_view.template()?;
-        let template_path = PathBuf::from(&template).canonicalize()?;
+        let template_path = PathBuf::from(&template);
+        let template_path = template_path
+            .canonicalize()
+            .wrap_err_with(|| Error::FailedToLoadTemplate(template_path.to_path_buf()))?;
         let template_id = template_path
             .file_name()
             .unwrap()
             .to_str()
             .unwrap()
             .to_string();
-        let template_content = fs::read_to_string(&template_path)?;
+        let template_content = fs::read_to_string(&template_path)
+            .wrap_err_with(|| Error::FailedToLoadTemplate(template_path.clone()))?;
         self.register_template(&template_id, template_content)?;
 
         let output_pattern_id = format!("{}-output-pattern", name);
@@ -123,6 +170,10 @@ impl<'a> Context<'a> {
             template_id,
             output_pattern_id,
         ))?;
+        // SAFETY: We just registered the view in the preceding line.
+        let view = self.views.get_mut(&name).unwrap();
+        view.register_global_property("config", &self.config)?;
+        view.register_global_function("markdownToHtml", markdown_to_html)?;
 
         Ok(Some(name))
     }
@@ -150,7 +201,8 @@ impl<'a> Context<'a> {
     }
 
     /// Renders the view with the given name.
-    pub fn render_view<N: AsRef<str>>(&mut self, name: N) -> Result<()> {
+    pub fn render_view<N: AsRef<str>>(&mut self, name: N) -> Result<u64> {
+        let mut output_count = 0_u64;
         let name = name.as_ref();
         let view = self
             .views
@@ -160,30 +212,53 @@ impl<'a> Context<'a> {
         for entry_result in select_glob {
             let entry = entry_result?;
             if entry.is_file() {
-                let data = serde_json::Value::from(load_data(&entry)?);
+                let data = Value::load_from_file(&entry)?;
                 // Only render the data if we get data back from the processing
                 // step in the script.
                 if let Some(processed) = view.process(&data)? {
-                    let output_path =
-                        PathBuf::from(self.hb.render(view.output_pattern_id(), &processed)?)
-                            .canonicalize()?;
+                    let processed = JsonValue::from(processed);
+                    let output_path_rendered =
+                        PathBuf::from(self.hb.render(view.output_pattern_id(), &processed)?);
+                    let output_path = if output_path_rendered.is_relative() {
+                        self.output_base_path.join(output_path_rendered)
+                    } else {
+                        output_path_rendered
+                    };
+                    ensure_parent_path_exists(&output_path)?;
                     let rendered = self.hb.render(view.template_id(), &processed)?;
                     fs::write(&output_path, &rendered)?;
                     debug!("View {} generated {}", name, output_path.display());
+                    output_count += 1;
                 } else {
                     debug!("{}.process() skipped entry {}", name, entry.display());
                 }
             }
         }
-        Ok(())
+        Ok(output_count)
     }
 
     /// Render all views.
-    pub fn render_all(&mut self) -> Result<()> {
+    pub fn render_all(&mut self) -> Result<u64> {
+        let mut output_count = 0_u64;
         let view_names = self.views.keys().cloned().collect::<Vec<String>>();
         for view_name in view_names {
-            self.render_view(view_name)?;
+            output_count += self.render_view(view_name)?;
         }
-        Ok(())
+        Ok(output_count)
     }
+}
+
+fn ensure_parent_path_exists(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::PathMissingParent(path.to_path_buf()))?;
+    ensure_path_exists(parent)
+}
+
+fn ensure_path_exists(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        fs::create_dir_all(path)?;
+        debug!("Created path: {}", path.display());
+    }
+    Ok(())
 }

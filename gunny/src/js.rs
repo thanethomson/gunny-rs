@@ -2,22 +2,23 @@
 // TODO: When https://github.com/boa-dev/boa/pull/1746 lands, refactor all of
 // this code.
 
-use boa::JsValue;
+use boa::{JsResult, JsString, JsValue};
 use eyre::Result;
-use serde::Serialize;
-use serde_json::Value;
+use log::trace;
+use pulldown_cmark::{Options, Parser};
+use serde_json::Value as JsonValue;
 
-use crate::Error;
+use crate::{Error, Value};
 
 /// Execute a JavaScript function with an arbitrary variable, automatically
 /// parsing the return result back into JSON.
-pub fn execute_fn_with_var<V: Serialize>(
+pub fn execute_fn_with_var(
     ctx: &mut boa::Context,
     name: &str,
-    value: &V,
+    value: &Value,
     fn_name: &str,
 ) -> Result<Value> {
-    let json_str = serde_json::to_string(value)?.replace('\'', "\\'");
+    let json_str = format_json_str(&serde_json::to_string(&JsonValue::from(value.clone()))?);
     let script = format!(
         r#"
         let {name} = JSON.parse('{json_str}');
@@ -28,11 +29,12 @@ pub fn execute_fn_with_var<V: Serialize>(
         json_str = json_str,
         fn_name = fn_name
     );
+    trace!("Attempting to execute script:\n{}", script);
     let result = ctx
         .eval(script)
-        .map_err(|e| Error::JavaScript(fn_name.to_string(), format!("{:?}", e)))?;
+        .map_err(|e| Error::JavaScript(fn_name.to_string(), format!("{:#?}", e)))?;
     Ok(match &result {
-        JsValue::String(s) => serde_json::from_str(s)?,
+        JsValue::String(s) => Value::from(serde_json::from_str::<JsonValue>(s)?),
         _ => {
             return Err(Error::UnexpectedJavaScriptReturnValue(
                 fn_name.to_string(),
@@ -45,12 +47,8 @@ pub fn execute_fn_with_var<V: Serialize>(
 
 /// Register an object parsed from the given JSON under the specified name in
 /// the given context.
-pub fn register_json_var<V: Serialize>(
-    ctx: &mut boa::Context,
-    name: &str,
-    value: &V,
-) -> Result<()> {
-    let json_str = serde_json::to_string(value)?.replace('\'', "\\'");
+pub fn register_json_var(ctx: &mut boa::Context, name: &str, value: &Value) -> Result<()> {
+    let json_str = format_json_str(&serde_json::to_string(&JsonValue::from(value.clone()))?);
     ctx.eval(format!(
         r#"let {name} = JSON.parse('{json_str}');"#,
         name = name,
@@ -58,6 +56,35 @@ pub fn register_json_var<V: Serialize>(
     ))
     .map_err(|e| Error::JsonToJavaScript(format!("{:?}", e)))?;
     Ok(())
+}
+
+fn format_json_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+pub fn markdown_to_html(
+    _this: &JsValue,
+    args: &[JsValue],
+    _ctx: &mut boa::Context,
+) -> JsResult<JsValue> {
+    trace!("args = {:#?}", args);
+    if args.len() != 1 {
+        return Err(JsValue::String(JsString::new(
+            "expecting a single argument for markdownToHtml",
+        )));
+    }
+    let content = match &args[0] {
+        JsValue::String(s) => s.to_string(),
+        _ => return Err(JsValue::String(JsString::new("expected a string argument"))),
+    };
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_HEADING_ATTRIBUTES;
+    let parser = Parser::new_ext(&content, options);
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, parser);
+    Ok(JsValue::String(JsString::from(html)))
 }
 
 #[cfg(test)]
@@ -75,11 +102,12 @@ mod test {
         });
         ctx.eval("function passThrough(val) { return val; }")
             .unwrap();
-        let result = execute_fn_with_var(&mut ctx, "testObj", &json_obj, "passThrough").unwrap();
+        let result =
+            execute_fn_with_var(&mut ctx, "testObj", &json_obj.into(), "passThrough").unwrap();
         match result {
             Value::Object(obj) => {
-                assert_eq!(obj.get("title").unwrap(), "Test");
-                assert_eq!(obj.get("magicNumber").unwrap(), 42);
+                assert_eq!(obj.get("title").unwrap().as_str().unwrap(), "Test");
+                assert_eq!(obj.get("magicNumber").unwrap().as_u64().unwrap(), 42);
             }
             _ => panic!("unexpected return type from function: {:?}", result),
         }
