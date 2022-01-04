@@ -1,0 +1,18 @@
+[package]
+name = "gunny-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["Thane Thomson <connect@thanethomson.com>"]
+description = "An experimental command line-based, general-purpose static content generator."
+repository = "https://github.com/thanethomson/gunny-rs"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "gunny"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "3.0.0", features = ["derive"] }
+gunny = { version = "0.1.0", path = "../gunny" }
+log = "0.4"
+simple_logger = { version = "1.16", default-features = false, features = ["colors"] }

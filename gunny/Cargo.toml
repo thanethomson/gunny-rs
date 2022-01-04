@@ -1,0 +1,22 @@
+[package]
+name = "gunny"
+version = "0.1.0"
+edition = "2021"
+authors = ["Thane Thomson <connect@thanethomson.com>"]
+description = "An experimental general-purpose static content generator."
+repository = "https://github.com/thanethomson/gunny-rs"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+Boa = "=0.13.0"
+eyre = "0.6.5"
+glob = "0.3"
+log = "0.4"
+pulldown-cmark = { version = "0.9", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.8"
+sha2 = "0.10"
+subtle-encoding = "0.5"
+handlebars = "4.1"
+thiserror = "1"
