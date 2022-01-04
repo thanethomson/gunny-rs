@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Thane Thomson <connect@thanethomson.com>"]
 description = "An experimental command line-based, general-purpose static content generator."
 repository = "https://github.com/thanethomson/gunny-rs"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 
 [[bin]]
 name = "gunny"

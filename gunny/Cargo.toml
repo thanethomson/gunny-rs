@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Thane Thomson <connect@thanethomson.com>"]
 description = "An experimental general-purpose static content generator."
 repository = "https://github.com/thanethomson/gunny-rs"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 
 [dependencies]
 Boa = "=0.13.0"
