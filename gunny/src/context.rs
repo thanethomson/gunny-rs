@@ -209,30 +209,45 @@ impl<'a> Context<'a> {
             .get_mut(name)
             .ok_or_else(|| Error::NoSuchView(name.to_string()))?;
         let select_glob = view.select_glob()?;
+        let mut all_data = Vec::new();
         for entry_result in select_glob {
             let entry = entry_result?;
             if entry.is_file() {
                 let data = Value::load_from_file(&entry)?;
-                // Only render the data if we get data back from the processing
-                // step in the script.
-                if let Some(processed) = view.process(&data)? {
-                    let processed = JsonValue::from(processed);
-                    let output_path_rendered =
-                        PathBuf::from(self.hb.render(view.output_pattern_id(), &processed)?);
-                    let output_path = if output_path_rendered.is_relative() {
-                        self.output_base_path.join(output_path_rendered)
-                    } else {
-                        output_path_rendered
-                    };
-                    ensure_parent_path_exists(&output_path)?;
-                    let rendered = self.hb.render(view.template_id(), &processed)?;
-                    fs::write(&output_path, &rendered)?;
-                    debug!("View {} generated {}", name, output_path.display());
-                    output_count += 1;
-                } else {
-                    debug!("{}.process() skipped entry {}", name, entry.display());
-                }
+                all_data.push(data);
             }
+        }
+        // Only render the data if we get data back from the processing
+        // step in the script.
+        if let Some(all_processed) = view.process(&all_data[..])? {
+            let all_processed = JsonValue::from(all_processed);
+            let all_processed = match all_processed {
+                JsonValue::Array(arr) => arr,
+                JsonValue::Object(obj) => vec![JsonValue::Object(obj)],
+                _ => {
+                    return Err(Error::UnexpectedJavaScriptReturnValue(
+                        "process".to_string(),
+                        "expected either an object or an array".to_string(),
+                    )
+                    .into())
+                }
+            };
+            for processed in all_processed {
+                let output_path_rendered =
+                    PathBuf::from(self.hb.render(view.output_pattern_id(), &processed)?);
+                let output_path = if output_path_rendered.is_relative() {
+                    self.output_base_path.join(output_path_rendered)
+                } else {
+                    output_path_rendered
+                };
+                ensure_parent_path_exists(&output_path)?;
+                let rendered = self.hb.render(view.template_id(), &processed)?;
+                fs::write(&output_path, &rendered)?;
+                debug!("View {} generated {}", name, output_path.display());
+                output_count += 1;
+            }
+        } else {
+            debug!("{}.process() produced no output", name);
         }
         Ok(output_count)
     }

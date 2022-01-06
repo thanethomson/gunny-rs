@@ -5,7 +5,7 @@ use eyre::Result;
 use log::{debug, trace};
 
 use crate::{
-    js::{execute_fn_with_var, register_json_var},
+    js::{execute_fn_with_vars, register_json_var},
     Error, Value,
 };
 
@@ -180,6 +180,7 @@ impl View {
         Ok(())
     }
 
+    /// Register a native (Rust-based) function for use from JavaScript.
     pub fn register_global_function(&mut self, name: &str, func: NativeFunction) -> Result<()> {
         self.script_ctx
             .register_global_function(name, 1, func)
@@ -189,12 +190,12 @@ impl View {
 
     /// Calls the `process` method on the given data item. If the method returns
     /// `null` or `undefined`, then this method returns `Ok(None)`.
-    pub fn process(&mut self, item: &Value) -> Result<Option<Value>> {
-        let result = execute_fn_with_var(&mut self.script_ctx, "item", item, "process")?;
+    pub fn process(&mut self, items: &[Value]) -> Result<Option<Value>> {
+        let result = execute_fn_with_vars(&mut self.script_ctx, "items", items, "process")?;
         trace!("View {} processed result:\n{:#?}", self.name, result);
         match result {
             Value::Null => Ok(None),
-            Value::Object(_) => Ok(Some(result)),
+            Value::Object(_) | Value::Array(_) => Ok(Some(result)),
             _ => Err(Error::UnexpectedJavaScriptReturnValue(
                 "process".to_string(),
                 format!("{:?}", result),

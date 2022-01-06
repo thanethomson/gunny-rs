@@ -1,6 +1,5 @@
 //! JSON/JavaScript-related functionality.
-// TODO: When https://github.com/boa-dev/boa/pull/1746 lands, refactor all of
-// this code.
+// TODO: When https://github.com/boa-dev/boa/pull/1746 lands, refactor all of this code.
 
 use boa::{JsResult, JsString, JsValue};
 use eyre::Result;
@@ -10,24 +9,33 @@ use serde_json::Value as JsonValue;
 
 use crate::{Error, Value};
 
-/// Execute a JavaScript function with an arbitrary variable, automatically
-/// parsing the return result back into JSON.
-pub fn execute_fn_with_var(
+/// Execute a JavaScript function with an array of variables.
+pub fn execute_fn_with_vars(
     ctx: &mut boa::Context,
     name: &str,
-    value: &Value,
+    values: &[Value],
     fn_name: &str,
 ) -> Result<Value> {
-    let json_str = format_json_str(&serde_json::to_string(&JsonValue::from(value.clone()))?);
     let script = format!(
         r#"
-        let {name} = JSON.parse('{json_str}');
-        let result = {fn_name}({name});
-        JSON.stringify(result)
-    "#,
+            let {name} = [
+                {vars}
+            ];
+            let result = {fn_name}({name});
+            JSON.stringify(result)
+        "#,
         name = name,
-        json_str = json_str,
-        fn_name = fn_name
+        vars = values
+            .iter()
+            .map(|value| {
+                Ok(format!(
+                    r#"JSON.parse('{}')"#,
+                    format_json_str(&serde_json::to_string(&JsonValue::from(value.clone()))?)
+                ))
+            })
+            .collect::<Result<Vec<String>>>()?
+            .join(",\n"),
+        fn_name = fn_name,
     );
     trace!("Attempting to execute script:\n{}", script);
     let result = ctx
@@ -40,7 +48,7 @@ pub fn execute_fn_with_var(
                 fn_name.to_string(),
                 format!("{:?}", result),
             )
-            .into())
+            .into());
         }
     })
 }
@@ -100,14 +108,20 @@ mod test {
             "title": "Test",
             "magicNumber": 42,
         });
-        ctx.eval("function passThrough(val) { return val; }")
+        ctx.eval("function passThrough(vals) { return vals; }")
             .unwrap();
         let result =
-            execute_fn_with_var(&mut ctx, "testObj", &json_obj.into(), "passThrough").unwrap();
+            execute_fn_with_vars(&mut ctx, "testObj", &[json_obj.into()], "passThrough").unwrap();
         match result {
-            Value::Object(obj) => {
-                assert_eq!(obj.get("title").unwrap().as_str().unwrap(), "Test");
-                assert_eq!(obj.get("magicNumber").unwrap().as_u64().unwrap(), 42);
+            Value::Array(arr) => {
+                assert_eq!(arr.len(), 1);
+                match &arr[0] {
+                    Value::Object(obj) => {
+                        assert_eq!(obj.get("title").unwrap().as_str().unwrap(), "Test");
+                        assert_eq!(obj.get("magicNumber").unwrap().as_u64().unwrap(), 42);
+                    }
+                    _ => panic!("unexpected return type from function: {:?}", arr[0]),
+                }
             }
             _ => panic!("unexpected return type from function: {:?}", result),
         }
