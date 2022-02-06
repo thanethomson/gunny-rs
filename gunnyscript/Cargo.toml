@@ -1,0 +1,9 @@
+[package]
+name = "gunnyscript"
+version = "0.1.0"
+edition = "2021"
+description = """
+    A simple, human-readable, minimalistic data interchange format.
+    """
+
+[dependencies]

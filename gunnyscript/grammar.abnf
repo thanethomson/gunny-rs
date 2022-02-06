@@ -1,0 +1,41 @@
+properties             = *(documented-property newline)
+documented-property    = *wsoc [docstring] property *wsoc
+property               = id WSP value
+value                  = boolean / number / string / date / datetime / array / object
+
+boolean                = "true" / "false"
+
+number                 = float / unsigned-int / signed-int
+float                  = ["-"] 1*DIGIT "." 1*DIGIT
+unsigned-int           = 1*DIGIT
+signed-int             = "-" 1*DIGIT
+
+string                 = single-line-string / multi-line-string / literal-string
+single-line-string     = DQUOTE string-with-escapes DQUOTE
+multi-line-string      = 3DQUOTE *(string-with-escapes) 3DQUOTE
+literal-string         = "#" DQUOTE *CHAR DQUOTE "#"
+string-with-escapes    = *(*VCHAR *escape-seq)
+escape-seq             = "\r" / "\n" / "\t" / hex-escape-seq
+hex-escape-seq         = "\x" 2*HEXDIG
+
+; See https://datatracker.ietf.org/doc/html/rfc3339#page-12
+date                   = <RFC3339 date>
+datetime               = <RFC3339 date/time>
+
+array                  = "[" WSP *(value ",") WSP "]"
+
+object                 = "{" wsoc properties wsoc "}"
+
+docstring              = 1*docstring-line
+docstring-line         = "///" WSP docstring-line-content newline
+docstring-line-content = *VCHAR
+
+comment                = single-line-comment / multi-line-comment
+single-line-comment    = "//" *VCHAR newline
+multi-line-comment     = "/*" *comment-line "*/"
+comment-line           = *VCHAR newline
+
+newline                = LF / CRLF
+; Whitespace and/or comments (ignored)
+wsoc                   = *(WSP comment)
+

@@ -2,12 +2,13 @@
 
 Gunny is an **experimental** static content generator.
 
-Define **views** of your **data** with the aid of **templates**. Views are
-defined in JavaScript, and they provide the necessary logic to filter and
-transform your data before it's rendered through a template.
+Define **views** of your **data** with the aid of **templates**, having those
+views' outputs rendered to static text files.
 
-JavaScript parsing and execution is provided by [Boa], which currently only
-implements a subset of the JavaScript programming language.
+Some uses:
+
+- Generating configuration files
+- Static web site generation
 
 ## Requirements
 
@@ -33,6 +34,4 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
-[Boa]: https://github.com/boa-dev/boa
 

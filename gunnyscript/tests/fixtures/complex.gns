@@ -1,0 +1,68 @@
+/*
+ * Multi-line comments are supported (and parsed).
+ */
+
+// Single-line comments are also supported.
+
+/// Docstrings are supported.
+strings {
+    simpleString     "Jane Doe"
+    multiLine        """A multi-line string
+                        whose contents will automatically be de-dented
+                        and single newlines will be removed."""
+    multiLineLiteral #"This string's
+                       indentation and newlines
+                       will be preserved.
+
+                       "Quotes" are also supported."#
+}
+
+booleans {
+    value1 true
+    value2 false
+}
+
+numbers {
+    unsignedInt   1
+    signedInt     -1
+    float         3.14159
+    negativeFloat -3.14159
+}
+
+objects {
+    /// Nested docstring 1
+    nested1 {
+        /// Nested property docstring
+        name "First nested object"
+    }
+    /// Nested docstring 2.
+    nested2 {
+        name        "Second nested object"
+        description "With additional parameters"
+    }
+    nested3 {
+        name "Third nested object with embedded array"
+        arr  [1, 2, 3]
+    }
+    nested4 { name "Simple single-line object" }
+}
+
+dates {
+    naiveDate      2022-02-06
+    naiveDateTime  2022-02-06T11:42
+    offsetDateTime 2022-02-06T11:42-05
+}
+
+arrays {
+    numbers [1, 2, 3]
+    strings ["hello", "world"]
+    objects [
+        {
+            name "Object 1"
+        },
+        {
+            name "Object 2"
+        }
+    ]
+    heterogeneous [1, 1.2, "string", true]
+}
