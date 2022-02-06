@@ -1,9 +1,5 @@
-; A GunnyScript document is a collection of properties.
-properties             = *(documented-property newline)
-; Each property can be documented.
-documented-property    = *wsoc [docstring] property *wsoc
-; A property has an ID and a value.
-property               = id WSP value
+; A GunnyScript document consists of a single value of any supported type.
+document               = wsoc [docstring] value wsoc
 ; Values can be of several different types.
 value                  = boolean / number / string / date / datetime / array / object
 
@@ -30,9 +26,16 @@ hex-escape-seq         = "\x" 2*HEXDIG
 date                   = <RFC3339 date>
 datetime               = <RFC3339 iso-date-time>
 
-array                  = "[" WSP *(value ",") WSP "]"
+; Arrays can contain heterogeneous values. The final value optionally can have a
+; trailing comma, but it need not.
+array                  = "[" WSP *(value ",") WSP [value] WSP "]"
 
 object                 = "{" wsoc properties wsoc "}"
+properties             = *(documented-property newline)
+; Each property can be documented.
+documented-property    = *wsoc [docstring] property *wsoc
+; A property has an ID and a value.
+property               = id WSP value
 
 docstring              = 1*docstring-line
 docstring-line         = "///" WSP docstring-line-content newline
