@@ -1,7 +1,9 @@
 ; A GunnyScript document consists of a single value of any supported type.
 document               = wsoc [docstring] value wsoc
 ; Values can be of several different types.
-value                  = boolean / number / string / date / datetime / array / object
+value                  = null / boolean / number / string / date / datetime / array / object
+
+null                   = "null"
 
 boolean                = "true" / "false"
 

@@ -6,19 +6,9 @@
 /// This example illustrates a complex object (this is a docstring for the
 /// object as a whole).
 {
+    empty null
+
     /// Docstrings are supported.
-    strings {
-        simpleString     "Jane Doe"
-        multiLine        """A multi-line string
-                            whose contents will automatically be de-dented
-                            and single newlines will be removed."""
-        multiLineLiteral #"This string's
-                           indentation and newlines
-                           will be preserved.
-
-                           "Quotes" are also supported."#
-    }
-
     booleans {
         value1 true
         value2 false
@@ -29,6 +19,18 @@
         signedInt     -1
         float         3.14159
         negativeFloat -3.14159
+    }
+
+    strings {
+        simpleString     "Jane Doe"
+        multiLine        """A multi-line string
+                            whose contents will automatically be de-dented
+                            and single newlines will be removed."""
+        multiLineLiteral #"This string's
+                           indentation and newlines
+                           will be preserved.
+
+                           "Quotes" are also supported."#
     }
 
     objects {
