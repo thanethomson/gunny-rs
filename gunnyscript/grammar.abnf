@@ -21,7 +21,8 @@ single-line-string     = DQUOTE string-with-escapes DQUOTE
 multi-line-string      = 3DQUOTE *(string-with-escapes) 3DQUOTE
 ; #"Literal string, supporting inner "quotes"."#
 literal-string         = "#" DQUOTE *CHAR DQUOTE "#"
-string-with-escapes    = *(*VCHAR *escape-seq)
+string-with-escapes    = *escape-or-vchar
+escape-or-vchar        = escape-seq / VCHAR
 escape-seq             = "\r" / "\n" / "\t" / hex-escape-seq
 hex-escape-seq         = "\x" 2*HEXDIG
 
