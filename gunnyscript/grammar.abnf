@@ -43,7 +43,7 @@ docstring-line-content = *VCHAR
 
 comment                = single-line-comment / multi-line-comment
 single-line-comment    = "//" *VCHAR newline
-multi-line-comment     = "/*" *comment-line "*/"
+multi-line-comment     = "/*" *comment-line *VCHAR "*/"
 comment-line           = *VCHAR newline
 
 newline                = LF / CRLF
