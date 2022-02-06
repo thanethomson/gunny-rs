@@ -1,6 +1,10 @@
+; A GunnyScript document is a collection of properties.
 properties             = *(documented-property newline)
+; Each property can be documented.
 documented-property    = *wsoc [docstring] property *wsoc
+; A property has an ID and a value.
 property               = id WSP value
+; Values can be of several different types.
 value                  = boolean / number / string / date / datetime / array / object
 
 boolean                = "true" / "false"
@@ -11,8 +15,11 @@ unsigned-int           = 1*DIGIT
 signed-int             = "-" 1*DIGIT
 
 string                 = single-line-string / multi-line-string / literal-string
+; "Single-line string"
 single-line-string     = DQUOTE string-with-escapes DQUOTE
+; """Multi-line string"""
 multi-line-string      = 3DQUOTE *(string-with-escapes) 3DQUOTE
+; #"Literal string, supporting inner "quotes"."#
 literal-string         = "#" DQUOTE *CHAR DQUOTE "#"
 string-with-escapes    = *(*VCHAR *escape-seq)
 escape-seq             = "\r" / "\n" / "\t" / hex-escape-seq
@@ -20,7 +27,7 @@ hex-escape-seq         = "\x" 2*HEXDIG
 
 ; See https://datatracker.ietf.org/doc/html/rfc3339#page-12
 date                   = <RFC3339 date>
-datetime               = <RFC3339 date/time>
+datetime               = <RFC3339 iso-date-time>
 
 array                  = "[" WSP *(value ",") WSP "]"
 
