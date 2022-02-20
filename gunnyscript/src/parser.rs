@@ -645,6 +645,19 @@ string""#,
                     Event::SimpleValue(SimpleValue::String("Hello".to_string())),
                 ]
             ),
+            (
+                r#"{
+    /// Something about a.
+    a 123
+}"#,
+                vec![
+                    Event::Start(ComplexValue::Object),
+                    Event::DocCommentLine(" Something about a.\n".to_string()),
+                    Event::PropertyName("a".to_string()),
+                    Event::SimpleValue(SimpleValue::Number(Number::Unsigned(123))),
+                    Event::End(ComplexValue::Object),
+                ],
+            ),
         ];
         static ref NUMBERS: Vec<(&'static str, Vec<Event>)> = vec![(
             r#"{
