@@ -13,3 +13,4 @@ time = { version = "0.3.7", default-features = false }
 
 [dev-dependencies]
 lazy_static = "1.4.0"
+fixed-macro = "1.1.1"

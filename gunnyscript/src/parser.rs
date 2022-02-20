@@ -47,7 +47,7 @@ pub enum EoI {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Linespace,
-    DocComment(String),
+    DocCommentLine(String),
     SimpleValue(SimpleValue),
     Start(ComplexValue),
     PropertyName(String),
@@ -158,7 +158,7 @@ impl<D: Decoder> Parser<D> {
                     'n' => Some(self.parse_null(ch, buf)?),
                     '#' => Some(self.parse_string_literal(buf)?),
                     '"' => Some(self.parse_string(buf)?),
-                    '/' => Some(self.parse_pre_value_comment(buf)?),
+                    '/' => self.parse_pre_value_comment(buf)?,
                     ',' => {
                         if self.nesting.is_empty() {
                             return Err(self.err_in_buf(ParseError::UnexpectedChar(ch)));
@@ -175,7 +175,7 @@ impl<D: Decoder> Parser<D> {
                         self.state = State::ExpectingValue;
                         Some(id)
                     }
-                    '/' => Some(self.parse_pre_propname_comment(buf)?),
+                    '/' => self.parse_pre_propname_comment(buf)?,
                     ',' => None,
                     _ => return Err(self.err_in_buf(ParseError::InvalidPropertyNameChar(ch))),
                 },
@@ -185,6 +185,8 @@ impl<D: Decoder> Parser<D> {
                     self.state = State::ExpectingPropertyName;
                 }
             }
+            // By this point we've successfully parsed an optional token.
+            self.location = self.buf_location;
         }
         Ok(maybe_ev.unwrap())
     }
@@ -256,7 +258,7 @@ impl<D: Decoder> Parser<D> {
                     self.maybe_peek = Some(ch);
                     return Ok(s);
                 }
-                '0'..='9' | 'a'..='z' | '-' | ':' | '.' => {
+                '0'..='9' | 'a'..='z' | 'A'..='F' | '-' | ':' | '.' => {
                     s.push(ch);
                 }
                 _ => return Err(self.err_in_buf(ParseError::UnexpectedChar(ch))),
@@ -371,12 +373,88 @@ impl<D: Decoder> Parser<D> {
         Err(EoI::Incomplete)
     }
 
-    fn parse_pre_value_comment(&mut self, buf: &mut Bytes) -> Result<Event, EoI> {
-        todo!()
+    fn parse_pre_value_comment(&mut self, buf: &mut Bytes) -> Result<Option<Event>, EoI> {
+        let ch1 = self.next_char(buf)?;
+        match ch1 {
+            '/' => {
+                let ch2 = self.next_char(buf)?;
+                match ch2 {
+                    '/' => {
+                        if self.nesting.is_empty() {
+                            Ok(Some(self.parse_doc_comment_line(buf)?))
+                        } else {
+                            Err(self.err_at_buf(ParseError::UnexpectedDocComment))
+                        }
+                    }
+                    _ => self.parse_single_line_comment(ch2, buf),
+                }
+            }
+            '*' => self.parse_multiline_comment(buf),
+            _ => Err(self.err_in_buf(ParseError::InvalidCommentDelimiter(ch1))),
+        }
     }
 
-    fn parse_pre_propname_comment(&mut self, buf: &mut Bytes) -> Result<Event, EoI> {
-        todo!()
+    fn parse_doc_comment_line(&mut self, buf: &mut Bytes) -> Result<Event, EoI> {
+        let mut ch: char;
+        let mut value = String::new();
+
+        while buf.has_remaining() {
+            ch = self.next_char(buf)?;
+            value.push(ch);
+            if ch == '\n' {
+                self.maybe_peek = Some(ch);
+                return Ok(Event::DocCommentLine(value));
+            }
+        }
+        Err(EoI::Incomplete)
+    }
+
+    fn parse_single_line_comment(
+        &mut self,
+        first_char: char,
+        buf: &mut Bytes,
+    ) -> Result<Option<Event>, EoI> {
+        if first_char == '\n' {
+            return Ok(None);
+        }
+        let mut ch: char;
+        while buf.has_remaining() {
+            ch = self.next_char(buf)?;
+            if ch == '\n' {
+                self.maybe_peek = Some(ch);
+                return Ok(None);
+            }
+        }
+        Err(EoI::Incomplete)
+    }
+
+    fn parse_multiline_comment(&mut self, buf: &mut Bytes) -> Result<Option<Event>, EoI> {
+        let mut ch: char;
+        let mut lookahead = ['\0'; 2];
+        while buf.has_remaining() {
+            ch = self.next_char(buf)?;
+            lookahead[0] = lookahead[1];
+            lookahead[1] = ch;
+            if lookahead[0] == '*' && lookahead[1] == '/' {
+                return Ok(None);
+            }
+        }
+        Err(EoI::Incomplete)
+    }
+
+    fn parse_pre_propname_comment(&mut self, buf: &mut Bytes) -> Result<Option<Event>, EoI> {
+        let ch1 = self.next_char(buf)?;
+        match ch1 {
+            '/' => {
+                let ch2 = self.next_char(buf)?;
+                match ch2 {
+                    '/' => Ok(Some(self.parse_doc_comment_line(buf)?)),
+                    _ => self.parse_single_line_comment(ch2, buf),
+                }
+            }
+            '*' => self.parse_multiline_comment(buf),
+            _ => Err(self.err_in_buf(ParseError::InvalidCommentDelimiter(ch1))),
+        }
     }
 
     fn parse_property_name(&mut self, first_char: char, buf: &mut Bytes) -> Result<Event, EoI> {
@@ -411,10 +489,12 @@ fn parse_date(s: &str) -> Result<Date, ParseError> {
 fn parse_number(s: &str) -> Result<Number, ParseError> {
     if s.starts_with("0x") {
         parse_hex(s.strip_prefix("0x").unwrap())
-    } else if s.starts_with('-') {
-        parse_signed(s)
     } else if s.contains('.') {
         parse_fixed(s)
+    } else if s.starts_with('-') {
+        parse_signed(s)
+    } else if s.starts_with('0') && s.len() > 1 {
+        parse_octal(s)
     } else {
         parse_unsigned(s)
     }
@@ -446,9 +526,16 @@ fn parse_fixed(s: &str) -> Result<Number, ParseError> {
     Ok(Number::Fixed(value))
 }
 
+#[inline]
+fn parse_octal(s: &str) -> Result<Number, ParseError> {
+    let value = u64::from_str_radix(s, 8).map_err(ParseError::InvalidOctalNumber)?;
+    Ok(Number::Unsigned(value))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use fixed_macro::fixed;
     use lazy_static::lazy_static;
 
     lazy_static! {
@@ -492,6 +579,20 @@ mod test {
                     Event::End(ComplexValue::Object),
                 ],
             ),
+            (
+                r#"{ a "Hello", b { c true } }"#,
+                vec![
+                    Event::Start(ComplexValue::Object),
+                    Event::PropertyName("a".to_string()),
+                    Event::SimpleValue(SimpleValue::String("Hello".to_string())),
+                    Event::PropertyName("b".to_string()),
+                    Event::Start(ComplexValue::Object),
+                    Event::PropertyName("c".to_string()),
+                    Event::SimpleValue(SimpleValue::Boolean(true)),
+                    Event::End(ComplexValue::Object),
+                    Event::End(ComplexValue::Object),
+                ],
+            )
         ];
         static ref STRINGS: Vec<(&'static str, Vec<Event>)> = vec![
             (
@@ -520,6 +621,57 @@ string""#,
                 ))],
             )
         ];
+        static ref COMMENTS: Vec<(&'static str, Vec<Event>)> = vec![
+            (
+                r#"// Single-line comment
+// across multiple lines.
+/* Followed by a
+ * multi-line
+ * comment. */
+/// Followed by a doc comment.
+"Hello""#,
+                vec![
+                    Event::DocCommentLine(" Followed by a doc comment.\n".to_string()),
+                    Event::SimpleValue(SimpleValue::String("Hello".to_string())),
+                ]
+            ),
+            (
+                r#"/// Doc comment.
+
+"Hello""#,
+                vec![
+                    Event::DocCommentLine(" Doc comment.\n".to_string()),
+                    Event::Linespace,
+                    Event::SimpleValue(SimpleValue::String("Hello".to_string())),
+                ]
+            ),
+        ];
+        static ref NUMBERS: Vec<(&'static str, Vec<Event>)> = vec![(
+            r#"{
+    a 1
+    b -1
+    c 3.14159
+    d -3.14159
+    e 0xDEADBEEF
+    f 0755
+}"#,
+            vec![
+                Event::Start(ComplexValue::Object),
+                Event::PropertyName("a".to_string()),
+                Event::SimpleValue(SimpleValue::Number(Number::Unsigned(1))),
+                Event::PropertyName("b".to_string()),
+                Event::SimpleValue(SimpleValue::Number(Number::Signed(-1))),
+                Event::PropertyName("c".to_string()),
+                Event::SimpleValue(SimpleValue::Number(Number::Fixed(fixed!(3.14159: I64F64)))),
+                Event::PropertyName("d".to_string()),
+                Event::SimpleValue(SimpleValue::Number(Number::Fixed(fixed!(-3.14159: I64F64)))),
+                Event::PropertyName("e".to_string()),
+                Event::SimpleValue(SimpleValue::Number(Number::Unsigned(0xDEADBEEF))),
+                Event::PropertyName("f".to_string()),
+                Event::SimpleValue(SimpleValue::Number(Number::Unsigned(493))),
+                Event::End(ComplexValue::Object),
+            ]
+        ),];
     }
 
     #[test]
@@ -552,6 +704,30 @@ string""#,
     #[test]
     fn strings() {
         for (i, (test_case, events)) in STRINGS.iter().enumerate() {
+            let mut parser = Utf8Parser::default();
+            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
+            for (j, expected) in events.iter().enumerate() {
+                let actual = parser.next(&mut b).unwrap();
+                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn comments() {
+        for (i, (test_case, events)) in COMMENTS.iter().enumerate() {
+            let mut parser = Utf8Parser::default();
+            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
+            for (j, expected) in events.iter().enumerate() {
+                let actual = parser.next(&mut b).unwrap();
+                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn numbers() {
+        for (i, (test_case, events)) in NUMBERS.iter().enumerate() {
             let mut parser = Utf8Parser::default();
             let mut b = Bytes::copy_from_slice(test_case.as_bytes());
             for (j, expected) in events.iter().enumerate() {

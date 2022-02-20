@@ -44,6 +44,12 @@ pub enum ParseError {
     InvalidUnsignedNumber(ParseIntError),
     /// Invalid fixed-point number.
     InvalidFixedPointNumber(ParseFixedError),
+    /// Invalid octal number.
+    InvalidOctalNumber(ParseIntError),
+    /// Invalid comment delimiter character.
+    InvalidCommentDelimiter(char),
+    /// Doc comments for values are only supported at the root of the document.
+    UnexpectedDocComment,
 }
 
 impl From<ParseError> for Error {
