@@ -12,11 +12,9 @@ float                  = ["-"] 1*DIGIT "." 1*DIGIT
 unsigned-int           = 1*DIGIT
 signed-int             = "-" 1*DIGIT
 
-string                 = single-line-string / multi-line-string / literal-string
-; "Single-line string"
-single-line-string     = DQUOTE string-with-escapes DQUOTE
-; """Multi-line string"""
-multi-line-string      = 3DQUOTE *(string-with-escapes) 3DQUOTE
+string                 = non-literal-string / literal-string
+; "Non-literal string, supporting \n escaped characters and newlines."
+non-literal-string     = DQUOTE string-with-escapes DQUOTE
 ; #"Literal string, supporting inner "quotes"."#
 literal-string         = "#" DQUOTE *CHAR DQUOTE "#"
 string-with-escapes    = *escape-or-vchar
@@ -33,20 +31,22 @@ datetime               = <RFC3339 iso-date-time>
 array                  = "[" WSP *(value ",") WSP [value] WSP "]"
 
 object                 = "{" wsoc properties wsoc "}"
-properties             = *(documented-property newline)
+properties             = *(documented-property property-separator)
+property-separator     = newline / ","
 ; Each property can be documented.
 documented-property    = *wsoc [docstring] property *wsoc
 ; A property has an ID and a value.
 property               = id WSP value
+id                     = ALPHA *(ALPHA / DIGIT / "_" / "-")
 
 docstring              = 1*docstring-line
-docstring-line         = "///" WSP docstring-line-content newline
+docstring-line         = "///" docstring-line-content newline
 docstring-line-content = *VCHAR
 
 comment                = single-line-comment / multi-line-comment
-single-line-comment    = "//" *VCHAR newline
-multi-line-comment     = "/*" *comment-line *VCHAR "*/"
-comment-line           = *VCHAR newline
+single-line-comment    = "//" comment-content newline
+multi-line-comment     = "/*" *(comment-content *newline) "*/"
+comment-content        = *VCHAR
 
 newline                = LF / CRLF
 ; Whitespace and/or comments (ignored)

@@ -19,13 +19,16 @@
         signedInt     -1
         float         3.14159
         negativeFloat -3.14159
+        hex           0xDEADBEEF
+        octal         0755
+        binary        b10100101
     }
 
     strings {
         simpleString     "Jane Doe"
-        multiLine        """A multi-line string
-                            whose contents will automatically be de-dented
-                            and single newlines will be removed."""
+        multiLine        "A multi-line string
+                          whose contents will automatically be de-dented
+                          and single newlines will be removed."
         multiLineLiteral #"This string's
                            indentation and newlines
                            will be preserved.
@@ -70,4 +73,6 @@
         ]
         heterogeneous [1, 1.2, "string", true]
     }
+
+    multiple { values 1, on 2, a [3, 4, 5] }, single { line 6 }
 }
