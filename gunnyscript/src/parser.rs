@@ -180,11 +180,20 @@ impl<D: Decoder> Parser<D> {
                     _ => return Err(self.err_in_buf(ParseError::InvalidPropertyNameChar(ch))),
                 },
             };
-            if let Some(Event::SimpleValue(_)) = maybe_ev {
-                if let Some(ComplexValue::Object) = self.nesting.last() {
-                    self.state = State::ExpectingPropertyName;
+
+            match maybe_ev {
+                // If we found a token, and it indicates the end of a value
+                // (either simple or complex)...
+                Some(Event::SimpleValue(_)) | Some(Event::End(_)) => {
+                    // ... and we're inside an object ...
+                    if let Some(ComplexValue::Object) = self.nesting.last() {
+                        // ... we now expect a property name to follow.
+                        self.state = State::ExpectingPropertyName;
+                    }
                 }
+                _ => (),
             }
+
             // By this point we've successfully parsed an optional token.
             self.location = self.buf_location;
         }
@@ -731,6 +740,33 @@ string""#,
                 ]
             )
         ];
+        static ref ARRAYS: Vec<(&'static str, Vec<Event>)> = vec![
+            (
+                "[ 1, 2, 3 ]",
+                vec![
+                    Event::Start(ComplexValue::Array),
+                    Event::SimpleValue(SimpleValue::Number(Number::Unsigned(1))),
+                    Event::SimpleValue(SimpleValue::Number(Number::Unsigned(2))),
+                    Event::SimpleValue(SimpleValue::Number(Number::Unsigned(3))),
+                    Event::End(ComplexValue::Array),
+                ]
+            ),
+            (
+                "{ a [ 1, 2, 3 ], b 4 }",
+                vec![
+                    Event::Start(ComplexValue::Object),
+                    Event::PropertyName("a".to_string()),
+                    Event::Start(ComplexValue::Array),
+                    Event::SimpleValue(SimpleValue::Number(Number::Unsigned(1))),
+                    Event::SimpleValue(SimpleValue::Number(Number::Unsigned(2))),
+                    Event::SimpleValue(SimpleValue::Number(Number::Unsigned(3))),
+                    Event::End(ComplexValue::Array),
+                    Event::PropertyName("b".to_string()),
+                    Event::SimpleValue(SimpleValue::Number(Number::Unsigned(4))),
+                    Event::End(ComplexValue::Object),
+                ],
+            ),
+        ];
     }
 
     #[test]
@@ -799,6 +835,18 @@ string""#,
     #[test]
     fn dates() {
         for (i, (test_case, events)) in DATES.iter().enumerate() {
+            let mut parser = Utf8Parser::default();
+            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
+            for (j, expected) in events.iter().enumerate() {
+                let actual = parser.next(&mut b).unwrap();
+                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn arrays() {
+        for (i, (test_case, events)) in ARRAYS.iter().enumerate() {
             let mut parser = Utf8Parser::default();
             let mut b = Bytes::copy_from_slice(test_case.as_bytes());
             for (j, expected) in events.iter().enumerate() {
