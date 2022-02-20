@@ -573,6 +573,14 @@ mod test {
     use time::macros::{date, datetime};
 
     lazy_static! {
+        static ref IDENTIFIERS: Vec<(&'static str, Vec<Event>)> = vec![
+            ("null", vec![Event::SimpleValue(SimpleValue::Null)],),
+            ("true", vec![Event::SimpleValue(SimpleValue::Boolean(true))],),
+            (
+                "false",
+                vec![Event::SimpleValue(SimpleValue::Boolean(false))],
+            ),
+        ];
         static ref SIMPLE_OBJECTS: Vec<(&'static str, Vec<Event>)> = vec![
             (
                 "{ a true, b false, c 3 }",
@@ -770,83 +778,42 @@ string""#,
     }
 
     #[test]
-    fn identifier_parsing() {
-        const TEST_CASES: &[(&str, SimpleValue)] = &[
-            ("null", SimpleValue::Null),
-            ("true", SimpleValue::Boolean(true)),
-            ("false", SimpleValue::Boolean(false)),
-        ];
-        for (test_case, v) in TEST_CASES.iter() {
-            let mut parser = Utf8Parser::default();
-            let mut b = Bytes::from(*test_case);
-            let ev = parser.next(&mut b).unwrap();
-            assert_eq!(ev, Event::SimpleValue(v.clone()));
-        }
+    fn identifiers() {
+        parse_tests(&IDENTIFIERS);
     }
 
     #[test]
     fn simple_objects() {
-        for (i, (test_case, events)) in SIMPLE_OBJECTS.iter().enumerate() {
-            let mut parser = Utf8Parser::default();
-            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
-            for (j, expected) in events.iter().enumerate() {
-                let actual = parser.next(&mut b).unwrap();
-                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
-            }
-        }
+        parse_tests(&SIMPLE_OBJECTS);
     }
 
     #[test]
     fn strings() {
-        for (i, (test_case, events)) in STRINGS.iter().enumerate() {
-            let mut parser = Utf8Parser::default();
-            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
-            for (j, expected) in events.iter().enumerate() {
-                let actual = parser.next(&mut b).unwrap();
-                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
-            }
-        }
+        parse_tests(&STRINGS);
     }
 
     #[test]
     fn comments() {
-        for (i, (test_case, events)) in COMMENTS.iter().enumerate() {
-            let mut parser = Utf8Parser::default();
-            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
-            for (j, expected) in events.iter().enumerate() {
-                let actual = parser.next(&mut b).unwrap();
-                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
-            }
-        }
+        parse_tests(&COMMENTS);
     }
 
     #[test]
     fn numbers() {
-        for (i, (test_case, events)) in NUMBERS.iter().enumerate() {
-            let mut parser = Utf8Parser::default();
-            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
-            for (j, expected) in events.iter().enumerate() {
-                let actual = parser.next(&mut b).unwrap();
-                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
-            }
-        }
+        parse_tests(&NUMBERS);
     }
 
     #[test]
     fn dates() {
-        for (i, (test_case, events)) in DATES.iter().enumerate() {
-            let mut parser = Utf8Parser::default();
-            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
-            for (j, expected) in events.iter().enumerate() {
-                let actual = parser.next(&mut b).unwrap();
-                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
-            }
-        }
+        parse_tests(&DATES);
     }
 
     #[test]
     fn arrays() {
-        for (i, (test_case, events)) in ARRAYS.iter().enumerate() {
+        parse_tests(&ARRAYS);
+    }
+
+    fn parse_tests(test_cases: &[(&'static str, Vec<Event>)]) {
+        for (i, (test_case, events)) in test_cases.iter().enumerate() {
             let mut parser = Utf8Parser::default();
             let mut b = Bytes::copy_from_slice(test_case.as_bytes());
             for (j, expected) in events.iter().enumerate() {
