@@ -50,6 +50,22 @@ pub enum ParseError {
     InvalidCommentDelimiter(char),
     /// Doc comments for values are only supported at the root of the document.
     UnexpectedDocComment,
+    /// Invalid date/time value. Expecting RFC3339-formatted date.
+    InvalidDateTime(time::error::Parse),
+    /// Date value is missing its year.
+    MissingYearInDate,
+    /// Date value is missing its month.
+    MissingMonthInDate,
+    /// Date value is missing its day.
+    MissingDayInDate,
+    /// Failed to parse the year as an integer value.
+    InvalidDateYear(ParseIntError),
+    /// Failed to parse the month as an integer value.
+    InvalidDateMonth(ParseIntError),
+    /// Failed to parse the day as an integer value.
+    InvalidDateDay(ParseIntError),
+    /// Invalid date: one or more components is out of range.
+    InvalidDate(time::error::ComponentRange),
 }
 
 impl From<ParseError> for Error {

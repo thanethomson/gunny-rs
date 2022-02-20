@@ -3,7 +3,7 @@
 use core::marker::PhantomData;
 
 use bytes::{Buf, Bytes};
-use time::{Date, OffsetDateTime};
+use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 
 use crate::{
     encoding::{Decoder, Utf8Decoder},
@@ -258,7 +258,7 @@ impl<D: Decoder> Parser<D> {
                     self.maybe_peek = Some(ch);
                     return Ok(s);
                 }
-                '0'..='9' | 'a'..='z' | 'A'..='F' | '-' | ':' | '.' => {
+                '0'..='9' | 'a'..='z' | 'A'..='Z' | '-' | ':' | '.' => {
                     s.push(ch);
                 }
                 _ => return Err(self.err_in_buf(ParseError::UnexpectedChar(ch))),
@@ -479,11 +479,35 @@ impl<D: Decoder> Parser<D> {
 }
 
 fn parse_date_time(s: &str) -> Result<OffsetDateTime, ParseError> {
-    todo!()
+    let datetime = OffsetDateTime::parse(s, &Rfc3339).map_err(ParseError::InvalidDateTime)?;
+    Ok(datetime)
 }
 
 fn parse_date(s: &str) -> Result<Date, ParseError> {
-    todo!()
+    let mut ymd = s.split('-');
+    let year = ymd
+        .next()
+        .ok_or(ParseError::MissingYearInDate)?
+        .parse::<i32>()
+        .map_err(ParseError::InvalidDateYear)?;
+    let month = ymd
+        .next()
+        .ok_or(ParseError::MissingMonthInDate)?
+        .trim_start_matches('0')
+        .parse::<u8>()
+        .map_err(ParseError::InvalidDateMonth)?;
+    let day = ymd
+        .next()
+        .ok_or(ParseError::MissingDayInDate)?
+        .trim_start_matches('0')
+        .parse::<u8>()
+        .map_err(ParseError::InvalidDateDay)?;
+    Date::from_calendar_date(
+        year,
+        Month::try_from(month).map_err(ParseError::InvalidDate)?,
+        day,
+    )
+    .map_err(ParseError::InvalidDate)
 }
 
 fn parse_number(s: &str) -> Result<Number, ParseError> {
@@ -537,6 +561,7 @@ mod test {
     use super::*;
     use fixed_macro::fixed;
     use lazy_static::lazy_static;
+    use time::macros::{date, datetime};
 
     lazy_static! {
         static ref SIMPLE_OBJECTS: Vec<(&'static str, Vec<Event>)> = vec![
@@ -685,6 +710,27 @@ string""#,
                 Event::End(ComplexValue::Object),
             ]
         ),];
+        static ref DATES: Vec<(&'static str, Vec<Event>)> = vec![
+            (
+                "2020-01-02",
+                vec![Event::SimpleValue(SimpleValue::Date(date!(2020 - 01 - 02)))],
+            ),
+            (
+                "2020-01-02T12:54:00Z",
+                vec![Event::SimpleValue(SimpleValue::DateTime(
+                    datetime!(2020-01-02 12:54 UTC)
+                ))],
+            ),
+            (
+                "{ a 2020-01-02T12:54:00-05:00 }",
+                vec![
+                    Event::Start(ComplexValue::Object),
+                    Event::PropertyName("a".to_string()),
+                    Event::SimpleValue(SimpleValue::DateTime(datetime!(2020-01-02 12:54 -05:00))),
+                    Event::End(ComplexValue::Object),
+                ]
+            )
+        ];
     }
 
     #[test]
@@ -741,6 +787,18 @@ string""#,
     #[test]
     fn numbers() {
         for (i, (test_case, events)) in NUMBERS.iter().enumerate() {
+            let mut parser = Utf8Parser::default();
+            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
+            for (j, expected) in events.iter().enumerate() {
+                let actual = parser.next(&mut b).unwrap();
+                assert_eq!(actual, *expected, "test case {}, event {}", i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn dates() {
+        for (i, (test_case, events)) in DATES.iter().enumerate() {
             let mut parser = Utf8Parser::default();
             let mut b = Bytes::copy_from_slice(test_case.as_bytes());
             for (j, expected) in events.iter().enumerate() {
