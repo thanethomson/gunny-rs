@@ -21,7 +21,6 @@
         negativeFloat -3.14159
         hex           0xDEADBEEF
         octal         0755
-        binary        b10100101
     }
 
     strings {
@@ -55,9 +54,8 @@
     }
 
     dates {
-        naiveDate      2022-02-06
-        naiveDateTime  2022-02-06T11:42
-        offsetDateTime 2022-02-06T11:42-05
+        date     2022-02-06
+        dateTime 2022-02-06T11:42Z
     }
 
     arrays {
