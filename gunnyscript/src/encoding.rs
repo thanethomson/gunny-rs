@@ -1,13 +1,14 @@
 //! Functionality relating to UTF-8 decoding.
 
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 
-use crate::EncodingError;
+use crate::prelude::*;
+use crate::ParseError;
 
 /// Decodes characters from an in-memory buffer of bytes.
 pub trait Decoder {
     /// Attempt to decode a single character from the given buffer.
-    fn decode_char(buf: &mut Bytes) -> Result<Option<char>, EncodingError>;
+    fn decode_char<B: Buf>(buf: &mut B) -> Result<Option<char>, ParseError>;
 }
 
 // Fast lookup table taken from core::str::validation
@@ -36,7 +37,7 @@ const UTF8_CHAR_WIDTH: &[u8; 256] = &[
 pub struct Utf8Decoder;
 
 impl Decoder for Utf8Decoder {
-    fn decode_char(buf: &mut Bytes) -> Result<Option<char>, EncodingError> {
+    fn decode_char<B: Buf>(buf: &mut B) -> Result<Option<char>, ParseError> {
         // Not enough data
         if !buf.has_remaining() {
             return Ok(None);
@@ -44,7 +45,7 @@ impl Decoder for Utf8Decoder {
         let a = buf.get_u8();
         let ch_len = UTF8_CHAR_WIDTH[a as usize] as usize;
         if ch_len == 0 {
-            return Err(EncodingError::InvalidUtf8);
+            return Err(ParseError::InvalidUtf8);
         }
         // Not enough data
         if buf.remaining() < ch_len - 1 {
@@ -68,9 +69,9 @@ impl Decoder for Utf8Decoder {
                 let d = buf.get_u8() as u32;
                 (a & 0x07) << 18 | b << 12 | c << 6 | d
             }
-            _ => return Err(EncodingError::InvalidUtf8),
+            _ => return Err(ParseError::InvalidUtf8),
         })
-        .map_err(|_| EncodingError::InvalidUtf8)?;
+        .map_err(|_| ParseError::InvalidUtf8)?;
         Ok(Some(ch))
     }
 }

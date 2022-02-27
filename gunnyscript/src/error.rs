@@ -8,24 +8,42 @@ use crate::prelude::*;
 
 #[derive(Debug, Clone)]
 pub enum Error {
-    Encoding(EncodingError),
+    /// Parsing error, providing a line/column number.
+    LocatedParse(LocatedParseError),
+    /// A parsing error without a location.
     Parse(ParseError),
+    UnexpectedEof,
 }
 
 #[derive(Debug, Clone)]
-pub enum EncodingError {
-    /// Invalid UTF-8 byte.
-    InvalidUtf8,
+pub struct LocatedParseError {
+    line: usize,
+    column: usize,
+    err: ParseError,
 }
 
-impl From<EncodingError> for Error {
-    fn from(e: EncodingError) -> Self {
-        Self::Encoding(e)
+impl LocatedParseError {
+    pub fn new(line: usize, column: usize, err: ParseError) -> Self {
+        Self { line, column, err }
+    }
+
+    pub fn line(&self) -> usize {
+        self.line
+    }
+
+    pub fn column(&self) -> usize {
+        self.column
+    }
+
+    pub fn err(&self) -> &ParseError {
+        &self.err
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum ParseError {
+    /// Invalid UTF-8 byte.
+    InvalidUtf8,
     /// Unexpected character in input stream.
     UnexpectedChar(char),
     /// Invalid identifier in input stream.
@@ -66,10 +84,11 @@ pub enum ParseError {
     InvalidDateDay(ParseIntError),
     /// Invalid date: one or more components is out of range.
     InvalidDate(time::error::ComponentRange),
-}
-
-impl From<ParseError> for Error {
-    fn from(e: ParseError) -> Self {
-        Self::Parse(e)
-    }
+    /// Dangling doc comment. Doc comments must occur just before root values or
+    /// object properties.
+    DanglingDocComment,
+    /// Unexpected item encountered during parsing.
+    UnexpectedItem,
+    /// Duplicate property name in object.
+    DuplicatePropertyName(String),
 }

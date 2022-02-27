@@ -2,25 +2,30 @@
 
 use core::marker::PhantomData;
 
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 
 use crate::{
     encoding::{Decoder, Utf8Decoder},
     prelude::*,
-    Error, Fixed, Number, ParseError,
+    Error, LocatedParseError, Number, ParseError,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct Location {
     pub line: usize,
     pub column: usize,
+    pub bytes: usize,
 }
 
 impl Default for Location {
     fn default() -> Self {
         // Prefer human-readable locations.
-        Self { line: 1, column: 1 }
+        Self {
+            line: 1,
+            column: 1,
+            bytes: 0,
+        }
     }
 }
 
@@ -40,7 +45,7 @@ impl Location {
 /// Error or incomplete.
 #[derive(Debug, Clone)]
 pub enum EoI {
-    Error(Location, Error),
+    Error(LocatedParseError),
     Incomplete,
 }
 
@@ -94,23 +99,36 @@ pub struct Parser<D> {
     maybe_peek: Option<char>,
     newline_count: usize,
     nesting: Vec<ComplexValue>,
+    just_parsed_doc_comment: bool,
     _decoder: PhantomData<D>,
 }
 
 impl<D: Decoder> Parser<D> {
+    pub fn location(&self) -> Location {
+        self.location
+    }
+
     // Error at a specific location within the buffer.
     #[inline]
-    fn err_in_buf<E: Into<Error>>(&self, e: E) -> EoI {
-        EoI::Error(self.buf_location, e.into())
+    fn err_in_buf(&self, e: ParseError) -> EoI {
+        EoI::Error(LocatedParseError::new(
+            self.buf_location.line,
+            self.buf_location.column,
+            e,
+        ))
     }
 
     // Error at the beginning of the buffer.
     #[inline]
-    fn err_at_buf<E: Into<Error>>(&self, e: E) -> EoI {
-        EoI::Error(self.location, e.into())
+    fn err_at_buf(&self, e: ParseError) -> EoI {
+        EoI::Error(LocatedParseError::new(
+            self.location.line,
+            self.location.column,
+            e,
+        ))
     }
 
-    fn next_char(&mut self, buf: &mut Bytes) -> Result<char, EoI> {
+    fn next_char<B: Buf>(&mut self, buf: &mut B) -> Result<char, EoI> {
         if let Some(ch) = self.maybe_peek.take() {
             // If we've already peeked at the next character, just return it
             // without modifying our location information.
@@ -127,7 +145,7 @@ impl<D: Decoder> Parser<D> {
         Ok(ch)
     }
 
-    pub fn next(&mut self, buf: &mut Bytes) -> Result<Event, EoI> {
+    pub fn next<B: Buf>(&mut self, buf: &mut B) -> Result<Event, EoI> {
         let mut maybe_ev = None;
 
         while maybe_ev.is_none() {
@@ -141,6 +159,9 @@ impl<D: Decoder> Parser<D> {
                 // We only care whether we encounter a single linespace. More than
                 // one doesn't matter.
                 if self.newline_count == 2 {
+                    if self.just_parsed_doc_comment {
+                        return Err(self.err_in_buf(ParseError::DanglingDocComment));
+                    }
                     return Ok(Event::Linespace);
                 }
                 self.skip_whitespace(buf)?;
@@ -190,8 +211,14 @@ impl<D: Decoder> Parser<D> {
                         // ... we now expect a property name to follow.
                         self.state = State::ExpectingPropertyName;
                     }
+                    self.just_parsed_doc_comment = false;
                 }
-                _ => (),
+                Some(Event::DocCommentLine(_)) => {
+                    self.just_parsed_doc_comment = true;
+                }
+                _ => {
+                    self.just_parsed_doc_comment = false;
+                }
             }
 
             // By this point we've successfully parsed an optional token.
@@ -200,7 +227,15 @@ impl<D: Decoder> Parser<D> {
         Ok(maybe_ev.unwrap())
     }
 
-    fn consume_until_not(&mut self, buf: &mut Bytes, keep_matching: &[char]) -> Result<(), EoI> {
+    pub fn expecting_more(&self) -> bool {
+        !self.nesting.is_empty()
+    }
+
+    fn consume_until_not<B: Buf>(
+        &mut self,
+        buf: &mut B,
+        keep_matching: &[char],
+    ) -> Result<(), EoI> {
         while buf.has_remaining() {
             let ch = self.next_char(buf)?;
             if !keep_matching.contains(&ch) {
@@ -211,7 +246,7 @@ impl<D: Decoder> Parser<D> {
         Err(EoI::Incomplete)
     }
 
-    fn skip_whitespace(&mut self, buf: &mut Bytes) -> Result<(), EoI> {
+    fn skip_whitespace<B: Buf>(&mut self, buf: &mut B) -> Result<(), EoI> {
         self.consume_until_not(buf, &[' ', '\t', '\r'])
     }
 
@@ -239,10 +274,10 @@ impl<D: Decoder> Parser<D> {
         }
     }
 
-    fn parse_non_string_simple_value(
+    fn parse_non_string_simple_value<B: Buf>(
         &mut self,
         first_char: char,
-        buf: &mut Bytes,
+        buf: &mut B,
     ) -> Result<String, EoI> {
         let mut s = String::new();
         let mut ch: char;
@@ -280,7 +315,11 @@ impl<D: Decoder> Parser<D> {
         }
     }
 
-    fn parse_number_or_date(&mut self, first_char: char, buf: &mut Bytes) -> Result<Event, EoI> {
+    fn parse_number_or_date<B: Buf>(
+        &mut self,
+        first_char: char,
+        buf: &mut B,
+    ) -> Result<Event, EoI> {
         match first_char {
             '-' | '+' => self.parse_number(first_char, buf),
             _ => {
@@ -292,20 +331,20 @@ impl<D: Decoder> Parser<D> {
                     let date = parse_date(&value).map_err(|e| self.err_at_buf(e))?;
                     Ok(Event::SimpleValue(SimpleValue::Date(date)))
                 } else {
-                    let num = parse_number(&value).map_err(|e| self.err_at_buf(e))?;
+                    let num = Number::from_str(&value).map_err(|e| self.err_at_buf(e))?;
                     Ok(Event::SimpleValue(SimpleValue::Number(num)))
                 }
             }
         }
     }
 
-    fn parse_number(&mut self, first_char: char, buf: &mut Bytes) -> Result<Event, EoI> {
+    fn parse_number<B: Buf>(&mut self, first_char: char, buf: &mut B) -> Result<Event, EoI> {
         let value = self.parse_non_string_simple_value(first_char, buf)?;
-        let num = parse_number(&value).map_err(|e| self.err_at_buf(e))?;
+        let num = Number::from_str(&value).map_err(|e| self.err_at_buf(e))?;
         Ok(Event::SimpleValue(SimpleValue::Number(num)))
     }
 
-    fn parse_bool(&mut self, first_char: char, buf: &mut Bytes) -> Result<Event, EoI> {
+    fn parse_bool<B: Buf>(&mut self, first_char: char, buf: &mut B) -> Result<Event, EoI> {
         let value = self.parse_non_string_simple_value(first_char, buf)?;
         match value.as_str() {
             "true" => Ok(Event::SimpleValue(SimpleValue::Boolean(true))),
@@ -314,7 +353,7 @@ impl<D: Decoder> Parser<D> {
         }
     }
 
-    fn parse_null(&mut self, first_char: char, buf: &mut Bytes) -> Result<Event, EoI> {
+    fn parse_null<B: Buf>(&mut self, first_char: char, buf: &mut B) -> Result<Event, EoI> {
         let value = self.parse_non_string_simple_value(first_char, buf)?;
         match value.as_str() {
             "null" => Ok(Event::SimpleValue(SimpleValue::Null)),
@@ -322,7 +361,7 @@ impl<D: Decoder> Parser<D> {
         }
     }
 
-    fn parse_string(&mut self, buf: &mut Bytes) -> Result<Event, EoI> {
+    fn parse_string<B: Buf>(&mut self, buf: &mut B) -> Result<Event, EoI> {
         let mut value = String::new();
         let mut ch: char;
 
@@ -339,7 +378,7 @@ impl<D: Decoder> Parser<D> {
         Err(EoI::Incomplete)
     }
 
-    fn parse_escape_seq(&mut self, buf: &mut Bytes) -> Result<char, EoI> {
+    fn parse_escape_seq<B: Buf>(&mut self, buf: &mut B) -> Result<char, EoI> {
         let escape_type = self.next_char(buf)?;
         Ok(match escape_type {
             '"' => '"',
@@ -354,7 +393,7 @@ impl<D: Decoder> Parser<D> {
         })
     }
 
-    fn parse_string_literal(&mut self, buf: &mut Bytes) -> Result<Event, EoI> {
+    fn parse_string_literal<B: Buf>(&mut self, buf: &mut B) -> Result<Event, EoI> {
         let mut in_string = false;
         let mut ch: char;
         let mut value = String::new();
@@ -382,7 +421,7 @@ impl<D: Decoder> Parser<D> {
         Err(EoI::Incomplete)
     }
 
-    fn parse_pre_value_comment(&mut self, buf: &mut Bytes) -> Result<Option<Event>, EoI> {
+    fn parse_pre_value_comment<B: Buf>(&mut self, buf: &mut B) -> Result<Option<Event>, EoI> {
         let ch1 = self.next_char(buf)?;
         match ch1 {
             '/' => {
@@ -403,7 +442,7 @@ impl<D: Decoder> Parser<D> {
         }
     }
 
-    fn parse_doc_comment_line(&mut self, buf: &mut Bytes) -> Result<Event, EoI> {
+    fn parse_doc_comment_line<B: Buf>(&mut self, buf: &mut B) -> Result<Event, EoI> {
         let mut ch: char;
         let mut value = String::new();
 
@@ -418,10 +457,10 @@ impl<D: Decoder> Parser<D> {
         Err(EoI::Incomplete)
     }
 
-    fn parse_single_line_comment(
+    fn parse_single_line_comment<B: Buf>(
         &mut self,
         first_char: char,
-        buf: &mut Bytes,
+        buf: &mut B,
     ) -> Result<Option<Event>, EoI> {
         if first_char == '\n' {
             return Ok(None);
@@ -437,7 +476,7 @@ impl<D: Decoder> Parser<D> {
         Err(EoI::Incomplete)
     }
 
-    fn parse_multiline_comment(&mut self, buf: &mut Bytes) -> Result<Option<Event>, EoI> {
+    fn parse_multiline_comment<B: Buf>(&mut self, buf: &mut B) -> Result<Option<Event>, EoI> {
         let mut ch: char;
         let mut lookahead = ['\0'; 2];
         while buf.has_remaining() {
@@ -451,7 +490,7 @@ impl<D: Decoder> Parser<D> {
         Err(EoI::Incomplete)
     }
 
-    fn parse_pre_propname_comment(&mut self, buf: &mut Bytes) -> Result<Option<Event>, EoI> {
+    fn parse_pre_propname_comment<B: Buf>(&mut self, buf: &mut B) -> Result<Option<Event>, EoI> {
         let ch1 = self.next_char(buf)?;
         match ch1 {
             '/' => {
@@ -466,7 +505,7 @@ impl<D: Decoder> Parser<D> {
         }
     }
 
-    fn parse_property_name(&mut self, first_char: char, buf: &mut Bytes) -> Result<Event, EoI> {
+    fn parse_property_name<B: Buf>(&mut self, first_char: char, buf: &mut B) -> Result<Event, EoI> {
         let mut name = String::new();
         let mut ch: char;
         name.push(first_char);
@@ -519,55 +558,53 @@ fn parse_date(s: &str) -> Result<Date, ParseError> {
     .map_err(ParseError::InvalidDate)
 }
 
-fn parse_number(s: &str) -> Result<Number, ParseError> {
-    if s.starts_with("0x") {
-        parse_hex(s.strip_prefix("0x").unwrap())
-    } else if s.contains('.') {
-        parse_fixed(s)
-    } else if s.starts_with('-') {
-        parse_signed(s)
-    } else if s.starts_with('0') && s.len() > 1 {
-        parse_octal(s)
-    } else {
-        parse_unsigned(s)
+/// An owned iterable parser that parses events from UTF-8 data.
+pub type Utf8IterableParser<'buf, B> = IterableParser<'buf, Utf8Decoder, B>;
+
+/// A parser that maintains its own reference to its buffer, such that it can
+/// facilitate iteration.
+pub struct IterableParser<'buf, D, B> {
+    parser: Parser<D>,
+    buf: &'buf mut B,
+}
+
+impl<'buf, D: Decoder, B: Buf> IterableParser<'buf, D, B> {
+    #[inline]
+    pub fn location(&self) -> Location {
+        self.parser.location()
+    }
+
+    #[inline]
+    pub fn expecting_more(&self) -> bool {
+        self.parser.expecting_more()
     }
 }
 
-#[inline]
-fn parse_hex(s: &str) -> Result<Number, ParseError> {
-    let value = u64::from_str_radix(s, 16).map_err(ParseError::InvalidHexNumber)?;
-    Ok(Number::Unsigned(value))
+impl<'buf, D: Decoder + Default, B: Buf> From<&'buf mut B> for IterableParser<'buf, D, B> {
+    fn from(buf: &'buf mut B) -> Self {
+        Self {
+            parser: Parser::default(),
+            buf,
+        }
+    }
 }
 
-#[inline]
-fn parse_signed(s: &str) -> Result<Number, ParseError> {
-    let value = s.parse::<i64>().map_err(ParseError::InvalidSignedNumber)?;
-    Ok(Number::Signed(value))
-}
+impl<'buf, D: Decoder, B: Buf> Iterator for IterableParser<'buf, D, B> {
+    type Item = Result<Event, Error>;
 
-#[inline]
-fn parse_unsigned(s: &str) -> Result<Number, ParseError> {
-    let value = s
-        .parse::<u64>()
-        .map_err(ParseError::InvalidUnsignedNumber)?;
-    Ok(Number::Unsigned(value))
-}
-
-#[inline]
-fn parse_fixed(s: &str) -> Result<Number, ParseError> {
-    let value = Fixed::from_str(s).map_err(ParseError::InvalidFixedPointNumber)?;
-    Ok(Number::Fixed(value))
-}
-
-#[inline]
-fn parse_octal(s: &str) -> Result<Number, ParseError> {
-    let value = u64::from_str_radix(s, 8).map_err(ParseError::InvalidOctalNumber)?;
-    Ok(Number::Unsigned(value))
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.parser.next(self.buf) {
+            Ok(event) => Some(Ok(event)),
+            Err(EoI::Incomplete) => None,
+            Err(EoI::Error(e)) => Some(Err(Error::LocatedParse(e))),
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use bytes::Bytes;
     use fixed_macro::fixed;
     use lazy_static::lazy_static;
     use time::macros::{date, datetime};
@@ -815,7 +852,7 @@ string""#,
     fn parse_tests(test_cases: &[(&'static str, Vec<Event>)]) {
         for (i, (test_case, events)) in test_cases.iter().enumerate() {
             let mut parser = Utf8Parser::default();
-            let mut b = Bytes::copy_from_slice(test_case.as_bytes());
+            let mut b = Bytes::from_static(test_case.as_bytes());
             for (j, expected) in events.iter().enumerate() {
                 let actual = parser.next(&mut b).unwrap();
                 assert_eq!(actual, *expected, "test case {}, event {}", i, j);

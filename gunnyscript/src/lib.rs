@@ -13,6 +13,6 @@ pub mod parser;
 mod prelude;
 mod value;
 
-pub use error::{EncodingError, Error, ParseError};
+pub use error::{Error, LocatedParseError, ParseError};
 pub use number::{Fixed, Number};
-pub use value::Value;
+pub use value::{DocValue, Value};
