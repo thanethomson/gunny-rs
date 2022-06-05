@@ -1,6 +1,6 @@
 [workspace]
 members = [
     "gunny",
-    "gunny-cli",
     "gunnyscript",
+    "gunny-cli",
 ]

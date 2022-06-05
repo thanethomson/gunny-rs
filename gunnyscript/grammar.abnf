@@ -1,54 +1,59 @@
 ; A GunnyScript document consists of a single value of any supported type.
-document               = wsoc [docstring] value wsoc
+document                 = wsoc [docstring] value wsoc
 ; Values can be of several different types.
-value                  = null / boolean / number / string / date / datetime / array / object
+value                    = null / boolean / number / string / date / datetime / array / object
 
-null                   = "null"
+null                     = "null"
 
-boolean                = "true" / "false"
+boolean                  = "true" / "false"
 
-number                 = float / unsigned-int / signed-int
-float                  = ["-"] 1*DIGIT "." 1*DIGIT
-unsigned-int           = 1*DIGIT
-signed-int             = "-" 1*DIGIT
+number                   = float / unsigned-int / signed-int
+float                    = ["-"] 1*DIGIT "." 1*DIGIT
+unsigned-int             = 1*DIGIT
+signed-int               = "-" 1*DIGIT
 
-string                 = non-literal-string / literal-string
+string                   = regular-string / dedented-string
+regular-string           = non-literal-string / literal-string
+dedented-string          = "d" non-literal-string / literal-string
 ; "Non-literal string, supporting \n escaped characters and newlines."
-non-literal-string     = DQUOTE string-with-escapes DQUOTE
+non-literal-string       = DQUOTE string-with-escapes DQUOTE
 ; #"Literal string, supporting inner "quotes"."#
-literal-string         = "#" DQUOTE *CHAR DQUOTE "#"
-string-with-escapes    = *escape-or-vchar
-escape-or-vchar        = escape-seq / VCHAR
-escape-seq             = "\r" / "\n" / "\t" / hex-escape-seq
-hex-escape-seq         = "\x" 2*HEXDIG
+; n = non-zero positive integer value
+literal-string           = n"#" DQUOTE *CHAR DQUOTE n"#"
+string-with-escapes      = *escape-or-vchar
+escape-or-vchar          = escape-seq / VCHAR
+escape-seq               = "\r" / "\n" / "\t" / "\"" / hex-escape-seq
+hex-escape-seq           = "\x" 2*HEXDIG
 
 ; See https://datatracker.ietf.org/doc/html/rfc3339#page-12
-date                   = <RFC3339 date>
-datetime               = <RFC3339 iso-date-time>
+date                     = <RFC3339 date>
+datetime                 = <RFC3339 iso-date-time>
 
 ; Arrays can contain heterogeneous values. The final value optionally can have a
 ; trailing comma, but it need not.
-array                  = "[" WSP *(value ",") WSP [value] WSP "]"
+array                    = "[" wsoc *(value ",") wsoc [value] wsoc "]"
 
-object                 = "{" wsoc properties wsoc "}"
-properties             = *(documented-property property-separator)
-property-separator     = newline / ","
+object                   = "{" properties wsoc "}"
+properties               = *(wsoc documented-property property-separator)
+property-separator       = newline / ","
 ; Each property can be documented.
-documented-property    = *wsoc [docstring] property *wsoc
+documented-property      = pre-documented-property / post-documented-property
+pre-documented-property  = [docstring] property
+post-documented-property = property [docstring]
 ; A property has an ID and a value.
-property               = id WSP value
-id                     = ALPHA *(ALPHA / DIGIT / "_" / "-")
+property                 = id WSP value
+id                       = ALPHA *(ALPHA / DIGIT / "_" / "-")
 
-docstring              = 1*docstring-line
-docstring-line         = "///" docstring-line-content newline
-docstring-line-content = *VCHAR
+docstring                = 1*docstring-line
+docstring-line           = "///" docstring-line-content newline
+docstring-line-content   = *VCHAR
 
-comment                = single-line-comment / multi-line-comment
-single-line-comment    = "//" comment-content newline
-multi-line-comment     = "/*" *(comment-content *newline) "*/"
-comment-content        = *VCHAR
+comment                  = single-line-comment / multi-line-comment
+single-line-comment      = "//" comment-content newline
+multi-line-comment       = "/*" *(comment-content *newline) "*/"
+comment-content          = *VCHAR
 
-newline                = LF / CRLF
+newline                  = LF / CRLF
 ; Whitespace and/or comments (ignored)
-wsoc                   = *(WSP comment)
+wsoc                     = *(WSP comment)
 

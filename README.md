@@ -1,23 +1,29 @@
 # Gunny
 
-Gunny is an **experimental** static content generator.
+Gunny aims to provide a **framework** for building static content generators in
+Rust.
 
-Define **views** of your **data** with the aid of **templates**, having those
-views' outputs rendered to static text files.
+## How it works
 
-Some uses:
+The following diagram gives a rough outline of how Gunny transforms raw data
+into static content.
 
-- Generating configuration files
-- Static web site generation
+```
+ +-------------+   +-------+   +------+   +----------------+
+ | Data source |-->| Model |-->| View |-->| Static content |
+ +-------------+   +-------+   +------+   +----------------+
+                                  ^
+                                  |
+                              +----------+
+                              | Template |
+                              +----------+
+```
 
-## Requirements
+In words:
 
-At present, no pre-built binaries are released, so you need to build from
-source. This requires:
-
-* Rust v1.57+
-
-## More docs coming soon
+- Views produce static content
+- Each view uses a template to render structured data
+- Structured data is loaded from raw data sources
 
 ## License
 
