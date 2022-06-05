@@ -66,7 +66,7 @@ impl<'a> Iterator for Lexer<'a> {
             }
             match peek.slice[0] {
                 // Whitespace
-                b' ' | b'\t' | b'\r' => self.advance(peek),
+                b' ' | b'\t' | b'\r' | b'\n' => self.advance(peek),
                 b'/' => match self.try_parse_comment_or_docstring() {
                     Ok(Some(docstring)) => return Some(Ok(docstring)),
                     // Skip comments that aren't docstrings
@@ -320,6 +320,19 @@ mod test {
             ("// A comment", &[]),
             ("/*\nA multi-line comment\n*/", &[]),
             ("/// Docstring", &[Token::DocstringLine(" Docstring")]),
+            (
+                r#"
+/*
+ * A multi-line comment
+ */
+/// A multi-line
+/// docstring
+                "#,
+                &[
+                    Token::DocstringLine(" A multi-line\n"),
+                    Token::DocstringLine(" docstring\n"),
+                ],
+            ),
         ];
         for (i, (tc, expected)) in TEST_CASES.iter().enumerate() {
             let lexer = Lexer::from(*tc);
