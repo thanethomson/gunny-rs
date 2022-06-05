@@ -325,6 +325,8 @@ mod test {
  */
 /// A multi-line
 /// docstring
+
+// A single-line comment
                 "#,
                 &[
                     Token::DocstringLine(" A multi-line\n"),
@@ -344,7 +346,10 @@ mod test {
 
     #[test]
     fn unexpected_char() {
-        let r = Lexer::from("😂").next().unwrap();
-        assert_eq!(r, located_err(1, Error::UnexpectedChar));
+        const TEST_CASES: &[&str] = &["😂", "$", "   $"];
+        for tc in TEST_CASES {
+            let r = Lexer::from(*tc).next().unwrap();
+            assert_eq!(r, located_err(1, Error::UnexpectedChar));
+        }
     }
 }
