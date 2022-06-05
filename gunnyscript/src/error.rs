@@ -2,7 +2,7 @@
 
 use core::str::Utf8Error;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Located<E> {
     pub line: usize,
     pub err: E,
@@ -18,7 +18,7 @@ pub fn located_err<T, E>(line: usize, err: E) -> Result<T, Located<E>> {
     Err(Located::new(line, err))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Error {
     IncompleteUtf8Char,
     UnexpectedEof,

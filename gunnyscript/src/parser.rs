@@ -52,10 +52,7 @@ impl<'a> Iterator for Lexer<'a> {
     type Item = Result<Token<'a>, Located<Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.pos >= self.len {
-                return None;
-            }
+        while self.pos < self.len {
             let peek = match Peek::from_slice(self.src, self.pos, 1, self.line, []) {
                 Ok(p) => p,
                 Err(e) => return Some(Err(e)),
@@ -115,6 +112,7 @@ impl<'a> Iterator for Lexer<'a> {
                 _ => return Some(self.located_err(Error::UnexpectedChar)),
             }
         }
+        None
     }
 }
 
@@ -342,5 +340,11 @@ mod test {
                 .expect(*tc);
             assert_eq!(Vec::from(*expected), actual, "test case {}", i);
         }
+    }
+
+    #[test]
+    fn unexpected_char() {
+        let r = Lexer::from("😂").next().unwrap();
+        assert_eq!(r, located_err(1, Error::UnexpectedChar));
     }
 }
