@@ -25,3 +25,9 @@ pub enum Error {
     UnexpectedChar,
     Utf8Error(Utf8Error),
 }
+
+impl Error {
+    pub fn located(self, line: usize) -> Located<Self> {
+        Located { line, err: self }
+    }
+}

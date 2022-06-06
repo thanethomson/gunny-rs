@@ -5,6 +5,7 @@
 use crate::{located_err, Error, Located};
 
 const START_LINE: usize = 1;
+const MATCH_BUF_SIZE: usize = 10;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token<'a> {
@@ -20,6 +21,7 @@ pub enum Token<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SimpleValue<'a> {
     Null,
+    Bool(bool),
     Number(&'a str),
     Date(&'a str),
     DateTime(&'a str),
@@ -53,7 +55,7 @@ impl<'a> Iterator for Lexer<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.pos < self.len {
-            let peek = match Peek::from_slice(self.src, self.pos, 1, self.line, []) {
+            let peek = match self.peek_char() {
                 Ok(p) => p,
                 Err(e) => return Some(Err(e)),
             };
@@ -78,7 +80,7 @@ impl<'a> Iterator for Lexer<'a> {
                     }
                 }
                 b't' | b'f' => {
-                    return match self.try_parse_bool() {
+                    return match self.try_parse_bool(peek.slice[0]) {
                         Ok(Some(t)) => Some(Ok(t)),
                         Ok(None) => Some(self.parse_property_id()),
                         Err(e) => Some(Err(e)),
@@ -129,22 +131,22 @@ impl<'a> Lexer<'a> {
     }
 
     fn try_parse_comment_or_docstring(&mut self) -> Result<Option<Token<'a>>, Located<Error>> {
-        let peek = Peek::from_slice(self.src, self.pos, 3, self.line, [])?;
-        if peek.starts_with([b'/', b'/', b'/']) {
+        let peek = self.peek_to_len(3)?;
+        if peek.starts_with(b"///") {
             // Skip past the "///" - we're only interested in the rest of the
             // line, including the newline.
             self.advance(peek);
 
-            let peek = Peek::from_slice(self.src, self.pos, -1, self.line, [b'\n'])?;
+            let peek = self.peek_until_match(&[b"\n"])?;
             let s = core::str::from_utf8(peek.slice)
                 .map_err(|e| Located::new(self.line, Error::Utf8Error(e)))?;
             self.advance(peek);
             return Ok(Some(Token::DocstringLine(s)));
         }
-        let peek = if peek.starts_with([b'/', b'*']) {
-            Peek::from_slice(self.src, self.pos, -1, self.line, [b'*', b'/'])?
-        } else if peek.starts_with([b'/', b'/']) {
-            Peek::from_slice(self.src, self.pos, -1, self.line, [b'\n'])?
+        let peek = if peek.starts_with(b"/*") {
+            self.peek_until_match(&[b"*/"])?
+        } else if peek.starts_with(b"//") {
+            self.peek_until_match(&[b"\n"])?
         } else {
             return self.located_err(Error::UnexpectedChar);
         };
@@ -154,11 +156,28 @@ impl<'a> Lexer<'a> {
     }
 
     fn try_parse_null(&mut self) -> Result<Option<Token<'a>>, Located<Error>> {
-        todo!()
+        let peek = self.peek_to_len(4)?;
+        if peek.slice == b"null" {
+            self.advance(peek);
+            Ok(Some(Token::Value(SimpleValue::Null)))
+        } else {
+            Ok(None)
+        }
     }
 
-    fn try_parse_bool(&mut self) -> Result<Option<Token<'a>>, Located<Error>> {
-        todo!()
+    fn try_parse_bool(&mut self, first: u8) -> Result<Option<Token<'a>>, Located<Error>> {
+        if first == b't' {
+            let peek = self.peek_to_len(4)?;
+            if peek.slice == b"true" {
+                return Ok(Some(Token::Value(SimpleValue::Bool(true))));
+            }
+        } else {
+            let peek = self.peek_to_len(5)?;
+            if peek.slice == b"false" {
+                return Ok(Some(Token::Value(SimpleValue::Bool(false))));
+            }
+        };
+        Ok(None)
     }
 
     fn parse_property_id(&mut self) -> Result<Token<'a>, Located<Error>> {
@@ -193,6 +212,76 @@ impl<'a> Lexer<'a> {
     fn located_err<T, E>(&self, err: E) -> Result<T, Located<E>> {
         located_err(self.line, err)
     }
+
+    // Peeks up to `len` characters.
+    fn peek_to_len(&self, len: usize) -> Result<Peek<'a>, Located<Error>> {
+        let mut pos = self.pos;
+        let mut lines = 0;
+        let mut chars = 0;
+        while pos < self.src.len() && chars < len {
+            let peek = self.peek_char()?;
+            pos += peek.slice.len();
+            chars += 1;
+            lines += peek.lines;
+        }
+        Ok(Peek {
+            slice: &self.src[self.pos..pos],
+            from: self.pos,
+            lines,
+        })
+    }
+
+    // Peeks until we match any of the given byte strings. Includes the matching
+    // slice at the end of the match.
+    fn peek_until_match(&self, opts: &[&[u8]]) -> Result<Peek<'a>, Located<Error>> {
+        let mut pos = self.pos;
+        let mut lines = 0;
+        let mut buf = [0_u8; MATCH_BUF_SIZE];
+        'outer: while pos < self.src.len() {
+            let peek = self.peek_char_at(pos)?;
+            pos += peek.slice.len();
+            lines += peek.lines;
+
+            // Rotate the buffer left by enough elements to inject the new slice
+            // at the end of the buffer
+            for i in 0..MATCH_BUF_SIZE - peek.slice.len() {
+                buf[i] = buf[i + peek.slice.len()];
+            }
+            // Inject the new slice at the end of the buffer
+            for (i, b) in peek.slice.iter().enumerate() {
+                buf[MATCH_BUF_SIZE - peek.slice.len() + i] = *b;
+            }
+            for opt in opts {
+                if &buf[MATCH_BUF_SIZE - opt.len()..] == *opt {
+                    break 'outer;
+                }
+            }
+        }
+        Ok(Peek {
+            slice: &self.src[self.pos..pos],
+            from: self.pos,
+            lines,
+        })
+    }
+
+    #[inline]
+    fn peek_char(&self) -> Result<Peek<'a>, Located<Error>> {
+        self.peek_char_at(self.pos)
+    }
+
+    fn peek_char_at(&self, pos: usize) -> Result<Peek<'a>, Located<Error>> {
+        let b = self.src[pos];
+        let ch_len = UTF8_CHAR_WIDTH[b as usize] as usize;
+        if self.pos + ch_len > self.src.len() {
+            self.located_err(Error::IncompleteUtf8Char)
+        } else {
+            Ok(Peek {
+                slice: &self.src[pos..pos + ch_len],
+                from: pos,
+                lines: if ch_len == 1 && b == b'\n' { 1 } else { 0 },
+            })
+        }
+    }
 }
 
 struct Peek<'a> {
@@ -202,82 +291,11 @@ struct Peek<'a> {
 }
 
 impl<'a> Peek<'a> {
-    fn from_slice<const C: usize>(
-        src: &'a [u8],
-        from: usize,
-        len: i32,
-        start_line: usize,
-        until: [u8; C],
-    ) -> Result<Self, Located<Error>> {
-        let mut pos = from;
-        let mut lines = 0;
-        let mut chars = 0_usize;
-        let mut match_buf = [0_u8; C];
-        while pos < src.len() && (len < 0 || chars < (len as usize)) {
-            let b = src[pos];
-            let ch_len = UTF8_CHAR_WIDTH[b as usize] as usize;
-            if pos + ch_len > src.len() {
-                return located_err(start_line + lines, Error::IncompleteUtf8Char);
-            }
-            pos += ch_len;
-            chars += 1;
-            if ch_len == 1 && b == b'\n' {
-                lines += 1;
-            }
-            if C > 0 {
-                slice_push(&mut match_buf, &src[pos - ch_len..pos]);
-                if match_buf == until {
-                    break;
-                }
-            }
-        }
-        Ok(Self {
-            slice: &src[from..pos],
-            from,
-            lines,
-        })
-    }
-
-    fn starts_with<const C: usize>(&self, p: [u8; C]) -> bool {
-        if self.slice.len() < C {
-            return false;
-        }
-        for (i, b) in p.iter().enumerate() {
-            if *b != self.slice[i] {
-                return false;
-            }
-        }
-        true
-    }
-}
-
-#[inline]
-fn slice_rotl(s: &mut [u8], n: usize) {
-    // We don't care
-    if n >= s.len() {
-        return;
-    }
-    for i in s.len() - n - 1..s.len() - 1 {
-        s[i] = s[i + 1];
-    }
-}
-
-#[inline]
-fn slice_push(s: &mut [u8], ch: &[u8]) {
-    if s.is_empty() {
-        return;
-    }
-    slice_rotl(s, ch.len());
-    let start = if ch.len() < s.len() {
-        s.len() - ch.len()
-    } else {
-        0
-    };
-    for (i, c) in ch.iter().enumerate() {
-        if start + i >= s.len() {
-            break;
-        }
-        s[start + i] = *c;
+    // Returns whether or not the slice we've peeked starts with the given
+    // prefix.
+    #[inline]
+    fn starts_with(&self, p: &[u8]) -> bool {
+        self.slice.len() >= p.len() && p[..] == self.slice[..p.len()]
     }
 }
 
@@ -308,6 +326,34 @@ mod test {
     use alloc::vec::Vec;
 
     use super::*;
+
+    #[test]
+    fn peek_to_len() {
+        let mut lexer = Lexer::from("a test string");
+        let peek = lexer.peek_to_len(6).unwrap();
+        assert_eq!(peek.slice, b"a test");
+        assert_eq!(peek.from, 0);
+        assert_eq!(peek.lines, 0);
+
+        lexer.advance(peek);
+        let peek = lexer.peek_to_len(4).unwrap();
+        assert_eq!(peek.slice, b" str");
+        assert_eq!(peek.from, 6);
+        assert_eq!(peek.lines, 0);
+    }
+
+    #[test]
+    fn peek_until_match() {
+        const TEST_CASES: &[(&str, &str, &str)] = &[
+            ("a test string", "test", "a test"),
+            ("a test string", "str", "a test str"),
+        ];
+        for (tc, opt, expected) in TEST_CASES {
+            let lexer = Lexer::from(*tc);
+            let peek = lexer.peek_until_match(&[opt.as_bytes()]).unwrap();
+            assert_eq!(peek.slice, expected.as_bytes());
+        }
+    }
 
     #[test]
     fn comment_and_whitespace_lexing() {
