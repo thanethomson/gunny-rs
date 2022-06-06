@@ -137,16 +137,16 @@ impl<'a> Lexer<'a> {
             // line, including the newline.
             self.advance(peek);
 
-            let peek = self.peek_until_match(&[b"\n"])?;
+            let peek = self.peek_until_match(&[b"\n"], true)?;
             let s = core::str::from_utf8(peek.slice)
                 .map_err(|e| Located::new(self.line, Error::Utf8Error(e)))?;
             self.advance(peek);
             return Ok(Some(Token::DocstringLine(s)));
         }
         let peek = if peek.starts_with(b"/*") {
-            self.peek_until_match(&[b"*/"])?
+            self.peek_until_match(&[b"*/"], true)?
         } else if peek.starts_with(b"//") {
-            self.peek_until_match(&[b"\n"])?
+            self.peek_until_match(&[b"\n"], true)?
         } else {
             return self.located_err(Error::UnexpectedChar);
         };
@@ -169,11 +169,13 @@ impl<'a> Lexer<'a> {
         if first == b't' {
             let peek = self.peek_to_len(4)?;
             if peek.slice == b"true" {
+                self.advance(peek);
                 return Ok(Some(Token::Value(SimpleValue::Bool(true))));
             }
         } else {
             let peek = self.peek_to_len(5)?;
             if peek.slice == b"false" {
+                self.advance(peek);
                 return Ok(Some(Token::Value(SimpleValue::Bool(false))));
             }
         };
@@ -181,7 +183,14 @@ impl<'a> Lexer<'a> {
     }
 
     fn parse_property_id(&mut self) -> Result<Token<'a>, Located<Error>> {
-        todo!()
+        let peek = self.peek_until_match(&[b" ", b"\n", b"\t", b"\r"], false)?;
+        if !is_valid_property_id(peek.slice) {
+            return self.located_err(Error::InvalidPropertyId);
+        }
+        let s = core::str::from_utf8(peek.slice)
+            .map_err(|e| Located::new(self.line, Error::Utf8Error(e)))?;
+        self.advance(peek);
+        Ok(Token::PropertyId(s))
     }
 
     fn parse_string(&mut self) -> Result<Token<'a>, Located<Error>> {
@@ -233,13 +242,19 @@ impl<'a> Lexer<'a> {
 
     // Peeks until we match any of the given byte strings. Includes the matching
     // slice at the end of the match.
-    fn peek_until_match(&self, opts: &[&[u8]]) -> Result<Peek<'a>, Located<Error>> {
+    fn peek_until_match(
+        &self,
+        opts: &[&[u8]],
+        include_match: bool,
+    ) -> Result<Peek<'a>, Located<Error>> {
         let mut pos = self.pos;
+        let mut match_end = 0;
         let mut lines = 0;
         let mut buf = [0_u8; MATCH_BUF_SIZE];
         'outer: while pos < self.src.len() {
             let peek = self.peek_char_at(pos)?;
             pos += peek.slice.len();
+            match_end = pos;
             lines += peek.lines;
 
             // Rotate the buffer left by enough elements to inject the new slice
@@ -253,12 +268,15 @@ impl<'a> Lexer<'a> {
             }
             for opt in opts {
                 if &buf[MATCH_BUF_SIZE - opt.len()..] == *opt {
+                    if !include_match {
+                        match_end -= peek.slice.len();
+                    }
                     break 'outer;
                 }
             }
         }
         Ok(Peek {
-            slice: &self.src[self.pos..pos],
+            slice: &self.src[self.pos..match_end],
             from: self.pos,
             lines,
         })
@@ -297,6 +315,22 @@ impl<'a> Peek<'a> {
     fn starts_with(&self, p: &[u8]) -> bool {
         self.slice.len() >= p.len() && p[..] == self.slice[..p.len()]
     }
+}
+
+#[inline]
+fn is_valid_property_id(s: &[u8]) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    if !matches!(s[0], b'a'..=b'z' | b'A'..=b'Z' | b'_') {
+        return false;
+    }
+    for b in &s[1..] {
+        if !matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_') {
+            return false;
+        }
+    }
+    true
 }
 
 // Fast lookup table taken from core::str::validation
@@ -350,7 +384,7 @@ mod test {
         ];
         for (tc, opt, expected) in TEST_CASES {
             let lexer = Lexer::from(*tc);
-            let peek = lexer.peek_until_match(&[opt.as_bytes()]).unwrap();
+            let peek = lexer.peek_until_match(&[opt.as_bytes()], true).unwrap();
             assert_eq!(peek.slice, expected.as_bytes());
         }
     }
@@ -396,6 +430,56 @@ mod test {
         for tc in TEST_CASES {
             let r = Lexer::from(*tc).next().unwrap();
             assert_eq!(r, located_err(1, Error::UnexpectedChar));
+        }
+    }
+
+    #[test]
+    fn null_lexing() {
+        const TEST_CASES: &[&str] = &["null", "   null", "null   ", "\n\nnull\n\n"];
+        for tc in TEST_CASES {
+            let t = Lexer::from(*tc).next().unwrap().unwrap();
+            assert_eq!(t, Token::Value(SimpleValue::Null));
+        }
+    }
+
+    #[test]
+    fn bool_lexing() {
+        const TEST_CASES: &[(&str, bool)] = &[
+            ("true", true),
+            ("false", false),
+            ("   true", true),
+            ("\n\ntrue", true),
+        ];
+        for (tc, expected) in TEST_CASES {
+            let t = Lexer::from(*tc).next().unwrap().unwrap();
+            assert_eq!(t, Token::Value(SimpleValue::Bool(*expected)));
+        }
+    }
+
+    #[test]
+    fn property_lexing() {
+        const TEST_CASES: &[(&str, &[Token])] = &[
+            (
+                "empty null",
+                &[Token::PropertyId("empty"), Token::Value(SimpleValue::Null)],
+            ),
+            (
+                "some-bool true\nanother-bool false",
+                &[
+                    Token::PropertyId("some-bool"),
+                    Token::Value(SimpleValue::Bool(true)),
+                    Token::PropertyId("another-bool"),
+                    Token::Value(SimpleValue::Bool(false)),
+                ],
+            ),
+        ];
+        for (i, (tc, expected)) in TEST_CASES.iter().enumerate() {
+            let lexer = Lexer::from(*tc);
+            let actual = lexer
+                .into_iter()
+                .collect::<Result<Vec<Token>, Located<Error>>>()
+                .expect(*tc);
+            assert_eq!(Vec::from(*expected), actual, "test case {}", i);
         }
     }
 }

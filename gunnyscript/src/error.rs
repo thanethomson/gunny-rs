@@ -24,6 +24,7 @@ pub enum Error {
     UnexpectedEof,
     UnexpectedChar,
     Utf8Error(Utf8Error),
+    InvalidPropertyId,
 }
 
 impl Error {
