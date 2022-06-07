@@ -6,6 +6,7 @@ use crate::{located_err, Error, Located};
 
 const START_LINE: usize = 1;
 const MATCH_BUF_SIZE: usize = 10;
+const STRING_LITERAL_DELIM: &[u8] = b"\"####################";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token<'a> {
@@ -137,16 +138,16 @@ impl<'a> Lexer<'a> {
             // line, including the newline.
             self.advance(peek);
 
-            let peek = self.peek_until_match(&[b"\n"], true)?;
+            let peek = self.peek_until_match(&[b"\n"], &[], true, false)?;
             let s = core::str::from_utf8(peek.slice)
                 .map_err(|e| Located::new(self.line, Error::Utf8Error(e)))?;
             self.advance(peek);
             return Ok(Some(Token::DocstringLine(s)));
         }
         let peek = if peek.starts_with(b"/*") {
-            self.peek_until_match(&[b"*/"], true)?
+            self.peek_until_match(&[b"*/"], &[], true, true)?
         } else if peek.starts_with(b"//") {
-            self.peek_until_match(&[b"\n"], true)?
+            self.peek_until_match(&[b"\n"], &[], true, false)?
         } else {
             return self.located_err(Error::UnexpectedChar);
         };
@@ -183,7 +184,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn parse_property_id(&mut self) -> Result<Token<'a>, Located<Error>> {
-        let peek = self.peek_until_match(&[b" ", b"\n", b"\t", b"\r"], false)?;
+        let peek = self.peek_until_match(&[b" ", b"\n", b"\t", b"\r"], &[], false, false)?;
         if !is_valid_property_id(peek.slice) {
             return self.located_err(Error::InvalidPropertyId);
         }
@@ -194,15 +195,71 @@ impl<'a> Lexer<'a> {
     }
 
     fn parse_string(&mut self) -> Result<Token<'a>, Located<Error>> {
-        todo!()
+        let s = self._parse_string(1)?;
+        Ok(Token::Value(SimpleValue::String(s)))
+    }
+
+    fn _parse_string(&mut self, skip_initial: usize) -> Result<&'a str, Located<Error>> {
+        // Skip over the initial '"' character
+        self.pos += skip_initial;
+        let peek = self.peek_until_match(&[b"\""], &[b"\\\""], false, true)?;
+        let s = core::str::from_utf8(peek.slice)
+            .map_err(|e| Located::new(self.line, Error::Utf8Error(e)))?;
+        self.advance(peek);
+        // Skip over the terminating '"' character
+        self.pos += 1;
+        Ok(s)
     }
 
     fn parse_string_literal(&mut self) -> Result<Token<'a>, Located<Error>> {
-        todo!()
+        let s = self._parse_string_literal(0)?;
+        Ok(Token::Value(SimpleValue::LiteralString(s)))
+    }
+
+    fn _parse_string_literal(&mut self, skip_initial: usize) -> Result<&'a str, Located<Error>> {
+        self.pos += skip_initial;
+        let peek = self.peek_until_not_match(&[b"#"])?;
+        let hash_count = peek.slice.len();
+        if hash_count > STRING_LITERAL_DELIM.len() - 1 {
+            return self.located_err(Error::StringLiteralDelimTooLong {
+                len: hash_count,
+                max_len: STRING_LITERAL_DELIM.len() - 1,
+            });
+        }
+        self.advance(peek);
+
+        // We expect a '"' character after '#'*
+        let peek = self.peek_char()?;
+        if peek.slice != b"\"" {
+            return self.located_err(Error::UnexpectedChar);
+        }
+        self.advance(peek);
+
+        let peek =
+            self.peek_until_match(&[&STRING_LITERAL_DELIM[..hash_count + 1]], &[], false, true)?;
+        let s = core::str::from_utf8(peek.slice)
+            .map_err(|e| Located::new(self.line, Error::Utf8Error(e)))?;
+        self.advance(peek);
+
+        // Advance past the end delimiter
+        self.pos += hash_count + 1;
+        Ok(s)
     }
 
     fn try_parse_dedent_string(&mut self) -> Result<Option<Token<'a>>, Located<Error>> {
-        todo!()
+        let peek = self.peek_chars(2)?;
+        if peek.slice.len() != 2 {
+            return Ok(None);
+        }
+        match peek.slice[1] {
+            b'"' => Ok(Some(Token::Value(SimpleValue::DedentString(
+                self._parse_string(2)?,
+            )))),
+            b'#' => Ok(Some(Token::Value(SimpleValue::DedentLiteralString(
+                self._parse_string_literal(1)?,
+            )))),
+            _ => Ok(None),
+        }
     }
 
     fn try_parse_number(&mut self) -> Result<Option<Token<'a>>, Located<Error>> {
@@ -241,16 +298,20 @@ impl<'a> Lexer<'a> {
     }
 
     // Peeks until we match any of the given byte strings. Includes the matching
-    // slice at the end of the match.
+    // slice at the end of the match. Skips over any matching byte strings in
+    // `skip`.
     fn peek_until_match(
         &self,
         opts: &[&[u8]],
+        skip: &[&[u8]],
         include_match: bool,
+        must_match: bool,
     ) -> Result<Peek<'a>, Located<Error>> {
         let mut pos = self.pos;
-        let mut match_end = 0;
+        let mut match_end = pos;
         let mut lines = 0;
         let mut buf = [0_u8; MATCH_BUF_SIZE];
+        let mut matched = false;
         'outer: while pos < self.src.len() {
             let peek = self.peek_char_at(pos)?;
             pos += peek.slice.len();
@@ -266,14 +327,65 @@ impl<'a> Lexer<'a> {
             for (i, b) in peek.slice.iter().enumerate() {
                 buf[MATCH_BUF_SIZE - peek.slice.len() + i] = *b;
             }
+            for sk in skip {
+                if &buf[MATCH_BUF_SIZE - sk.len()..] == *sk {
+                    continue 'outer;
+                }
+            }
             for opt in opts {
                 if &buf[MATCH_BUF_SIZE - opt.len()..] == *opt {
                     if !include_match {
-                        match_end -= peek.slice.len();
+                        match_end -= opt.len();
                     }
+                    matched = true;
                     break 'outer;
                 }
             }
+        }
+        if must_match && !matched {
+            return self.located_err(Error::MissingTerminator);
+        }
+        Ok(Peek {
+            slice: &self.src[self.pos..match_end],
+            from: self.pos,
+            lines,
+        })
+    }
+
+    // Peeks until we don't match any of the given byte strings.
+    fn peek_until_not_match(&self, opts: &[&[u8]]) -> Result<Peek<'a>, Located<Error>> {
+        let mut pos = self.pos;
+        let mut match_end = pos;
+        let mut lines = 0;
+        let mut buf = [0_u8; MATCH_BUF_SIZE];
+        let mut matched = false;
+        'outer: while pos < self.src.len() {
+            let peek = self.peek_char_at(pos)?;
+            // We match to this position to exclude the first non-matching
+            // character
+            match_end = pos;
+            pos += peek.slice.len();
+            lines += peek.lines;
+
+            // Rotate the buffer left by enough elements to inject the new slice
+            // at the end of the buffer
+            for i in 0..MATCH_BUF_SIZE - peek.slice.len() {
+                buf[i] = buf[i + peek.slice.len()];
+            }
+            // Inject the new slice at the end of the buffer
+            for (i, b) in peek.slice.iter().enumerate() {
+                buf[MATCH_BUF_SIZE - peek.slice.len() + i] = *b;
+            }
+            for opt in opts {
+                if &buf[MATCH_BUF_SIZE - opt.len()..] == *opt {
+                    continue 'outer;
+                }
+            }
+            matched = true;
+            break;
+        }
+        if !matched {
+            return self.located_err(Error::MissingTerminator);
         }
         Ok(Peek {
             slice: &self.src[self.pos..match_end],
@@ -285,6 +397,23 @@ impl<'a> Lexer<'a> {
     #[inline]
     fn peek_char(&self) -> Result<Peek<'a>, Located<Error>> {
         self.peek_char_at(self.pos)
+    }
+
+    fn peek_chars(&self, n: usize) -> Result<Peek<'a>, Located<Error>> {
+        let mut pos = self.pos;
+        let mut chars = 0;
+        let mut lines = 0;
+        while pos < self.len && chars < n {
+            let peek = self.peek_char_at(pos)?;
+            pos += peek.slice.len();
+            lines += peek.lines;
+            chars += 1;
+        }
+        Ok(Peek {
+            slice: &self.src[self.pos..pos],
+            from: self.pos,
+            lines,
+        })
     }
 
     fn peek_char_at(&self, pos: usize) -> Result<Peek<'a>, Located<Error>> {
@@ -384,7 +513,9 @@ mod test {
         ];
         for (tc, opt, expected) in TEST_CASES {
             let lexer = Lexer::from(*tc);
-            let peek = lexer.peek_until_match(&[opt.as_bytes()], true).unwrap();
+            let peek = lexer
+                .peek_until_match(&[opt.as_bytes()], &[], true, true)
+                .unwrap();
             assert_eq!(peek.slice, expected.as_bytes());
         }
     }
@@ -470,6 +601,75 @@ mod test {
                     Token::Value(SimpleValue::Bool(true)),
                     Token::PropertyId("another-bool"),
                     Token::Value(SimpleValue::Bool(false)),
+                ],
+            ),
+        ];
+        for (i, (tc, expected)) in TEST_CASES.iter().enumerate() {
+            let lexer = Lexer::from(*tc);
+            let actual = lexer
+                .into_iter()
+                .collect::<Result<Vec<Token>, Located<Error>>>()
+                .expect(*tc);
+            assert_eq!(Vec::from(*expected), actual, "test case {}", i);
+        }
+    }
+
+    #[test]
+    fn string_lexing() {
+        const TEST_CASES: &[(&str, &[Token])] = &[
+            ("\"string\"", &[Token::Value(SimpleValue::String("string"))]),
+            (
+                "a-string \"string\"",
+                &[
+                    Token::PropertyId("a-string"),
+                    Token::Value(SimpleValue::String("string")),
+                ],
+            ),
+            (
+                "literal #\"a literal string\"#",
+                &[
+                    Token::PropertyId("literal"),
+                    Token::Value(SimpleValue::LiteralString("a literal string")),
+                ],
+            ),
+            (
+                "literal ##\"a #\"literal\"# string\"##",
+                &[
+                    Token::PropertyId("literal"),
+                    Token::Value(SimpleValue::LiteralString("a #\"literal\"# string")),
+                ],
+            ),
+            (
+                "lit #\"literal\"#\nstr \"string\"",
+                &[
+                    Token::PropertyId("lit"),
+                    Token::Value(SimpleValue::LiteralString("literal")),
+                    Token::PropertyId("str"),
+                    Token::Value(SimpleValue::String("string")),
+                ],
+            ),
+            (
+                "d\"dedent\"",
+                &[Token::Value(SimpleValue::DedentString("dedent"))],
+            ),
+            (
+                "dedent d\"dedent\"",
+                &[
+                    Token::PropertyId("dedent"),
+                    Token::Value(SimpleValue::DedentString("dedent")),
+                ],
+            ),
+            (
+                "d#\"dedent literal\"#",
+                &[Token::Value(SimpleValue::DedentLiteralString(
+                    "dedent literal",
+                ))],
+            ),
+            (
+                "dedent d##\"dedent #\"literal\"#\"##",
+                &[
+                    Token::PropertyId("dedent"),
+                    Token::Value(SimpleValue::DedentLiteralString("dedent #\"literal\"#")),
                 ],
             ),
         ];

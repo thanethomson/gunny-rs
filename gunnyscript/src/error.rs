@@ -25,6 +25,8 @@ pub enum Error {
     UnexpectedChar,
     Utf8Error(Utf8Error),
     InvalidPropertyId,
+    StringLiteralDelimTooLong { len: usize, max_len: usize },
+    MissingTerminator,
 }
 
 impl Error {
